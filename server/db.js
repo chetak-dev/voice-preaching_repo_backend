@@ -22,9 +22,9 @@ export function verifyPassword(password, stored) {
   return timingSafeEqual(actual, expected) && Boolean(stored);
 }
 
-export function openDatabase(directory, demo) {
+export function openDatabase(directory) {
   mkdirSync(directory, { recursive: true });
-  const db = new DatabaseSync(path.join(directory, demo ? 'demo.sqlite' : 'platform.sqlite'));
+  const db = new DatabaseSync(path.join(directory, 'platform.sqlite'));
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
@@ -83,38 +83,10 @@ export function openDatabase(directory, demo) {
     ['quota_limit', 'INTEGER'],
     ['quota_checked_at', 'INTEGER'],
   ]);
-  if (demo && !db.prepare('SELECT id FROM users LIMIT 1').get()) seedDemo(db);
   return db;
 }
 
 export function audit(db, actorId, action, subject) {
   db.prepare('INSERT INTO audit VALUES (?, ?, ?, ?, ?)')
     .run(randomUUID(), actorId, action, subject, new Date().toISOString());
-}
-
-export const DEMO_PASSWORD = 'demo-password';
-
-function seedDemo(db) {
-  const now = new Date().toISOString();
-  const insertUser = db.prepare(`INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)`);
-  const password = hashPassword(DEMO_PASSWORD);
-  insertUser.run('demo-admin', 'admin@example.test', 'Ananya Sharma', 'site_admin', now, password);
-  insertUser.run('demo-org-admin', 'orgadmin@example.test', 'Keshav Nimai', 'org_admin', now, password);
-  insertUser.run('demo-user', 'member@example.test', 'Radhika Devi', 'user', now, password);
-  const samples = [
-    ['A little space for deeper learning', 'A curated starting point for exploring texts, ideas, and our shared cultural heritage.', 'https://archive.org', 'approved'],
-    ['The art of thoughtful storytelling', 'References and inspiration for your next community workshop.', 'https://www.si.edu', 'approved'],
-    ['Our living heritage', 'Explore collections that bring art, history, and culture together.', 'https://artsandculture.google.com', 'approved'],
-    ['Knowledge worth sharing', 'An open library of books and resources for lifelong learners.', 'https://openlibrary.org', 'approved'],
-    ['A world of sound', 'Discover recordings and sound collections from around the world.', 'https://www.loc.gov/audio/', 'approved'],
-    ['Make your next gathering meaningful', 'A collection of educational resources for facilitators and community teams.', 'https://www.unesco.org', 'approved'],
-    ['Community workshop resources', 'A new contribution ready for an admin to review.', 'https://www.wikipedia.org', 'pending'],
-    ['Ideas for our next chapter', 'Learning resources submitted by a member of the community.', 'https://www.edx.org', 'pending'],
-  ];
-  const insert = db.prepare(`INSERT INTO content
-    (id,title,description,type,url,status,uploader_id,created_at) VALUES (?,?,?,?,?,?,?,?)`);
-  samples.forEach(([title, description, url, status], i) => {
-    insert.run(`demo-content-${i}`, title, description, 'link', url, status,
-      i % 2 ? 'demo-user' : 'demo-org-admin', new Date(Date.now() - i * 86400000).toISOString());
-  });
 }

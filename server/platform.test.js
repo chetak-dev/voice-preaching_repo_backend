@@ -4,9 +4,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from './app.js';
-import { DEMO_PASSWORD } from './db.js';
+import { hashPassword } from './db.js';
 
 const ORIGIN = 'http://localhost:5173';
+const TEST_PASSWORD = 'test-password';
 let server;
 let app;
 let base;
@@ -14,7 +15,12 @@ let dataDir;
 
 before(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), 'voice-test-'));
-  app = createApp({ demo: true, production: false, dataDir, origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: ['owner@example.test'] });
+  app = createApp({ production: false, dataDir, origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: ['owner@example.test'] });
+  const insert = app.locals.db.prepare('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)');
+  const hashed = hashPassword(TEST_PASSWORD);
+  insert.run('test-admin', 'admin@example.test', 'Test Admin', 'site_admin', new Date().toISOString(), hashed);
+  insert.run('test-org-admin', 'orgadmin@example.test', 'Test Org Admin', 'org_admin', new Date().toISOString(), hashed);
+  insert.run('test-user', 'member@example.test', 'Test Member', 'user', new Date().toISOString(), hashed);
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -32,7 +38,7 @@ function post(url, body, origin = ORIGIN) {
   return fetch(`${base}${url}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(body) });
 }
 
-async function signIn(role, password = DEMO_PASSWORD) {
+async function signIn(role, password = TEST_PASSWORD) {
   const res = await post('/api/auth/login', { email: ACCOUNTS[role] || role, password });
   assert.equal(res.status, 200);
   const cookie = res.headers.get('set-cookie').split(';')[0];
@@ -50,7 +56,7 @@ test('unauthenticated requests are rejected', async () => {
 });
 
 test('state-changing requests from other origins are rejected', async () => {
-  const res = await post('/api/auth/login', { email: ACCOUNTS.user, password: DEMO_PASSWORD }, 'https://evil.example');
+  const res = await post('/api/auth/login', { email: ACCOUNTS.user, password: TEST_PASSWORD }, 'https://evil.example');
   assert.equal(res.status, 403);
 });
 
@@ -137,15 +143,15 @@ test('people can sign up, sign in and are rejected with bad credentials', async 
 test('only site admins can promote org admins', async () => {
   const orgAdmin = await signIn('org_admin');
   const admin = await signIn('site_admin');
-  assert.equal((await orgAdmin('/api/users/demo-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 403);
-  assert.equal((await admin('/api/users/demo-user', { method: 'PATCH', body: { role: 'site_admin' } })).status, 400);
-  assert.equal((await admin('/api/users/demo-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 200);
+  assert.equal((await orgAdmin('/api/users/test-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 403);
+  assert.equal((await admin('/api/users/test-user', { method: 'PATCH', body: { role: 'site_admin' } })).status, 400);
+  assert.equal((await admin('/api/users/test-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 200);
   const users = await admin('/api/users');
   assert.equal(users.status, 200);
-  assert.equal(users.json.users.find(entry => entry.id === 'demo-user').role, 'org_admin');
+  assert.equal(users.json.users.find(entry => entry.id === 'test-user').role, 'org_admin');
   assert.ok(users.json.users.every(entry => !('password_hash' in entry)));
-  assert.equal((await admin('/api/users/demo-admin', { method: 'PATCH', body: { role: 'user' } })).status, 403);
-  assert.equal((await admin('/api/users/demo-user', { method: 'PATCH', body: { role: 'user' } })).status, 200);
+  assert.equal((await admin('/api/users/test-admin', { method: 'PATCH', body: { role: 'user' } })).status, 403);
+  assert.equal((await admin('/api/users/test-user', { method: 'PATCH', body: { role: 'user' } })).status, 200);
   assert.equal((await (await signIn('user'))('/api/users')).status, 403);
 });
 
@@ -153,17 +159,17 @@ test('suspension rules and suspended accounts are blocked', async () => {
   const orgAdmin = await signIn('org_admin');
   const admin = await signIn('site_admin');
   const user = await signIn('user');
-  assert.equal((await orgAdmin('/api/users/demo-admin/suspend', { method: 'POST', body: { suspended: true } })).status, 403);
-  assert.equal((await admin('/api/users/demo-admin/suspend', { method: 'POST', body: { suspended: true } })).status, 400);
-  assert.equal((await orgAdmin('/api/users/demo-user/suspend', { method: 'POST', body: { suspended: true } })).status, 403);
-  assert.equal((await admin('/api/users/demo-user/suspend', { method: 'POST', body: { suspended: true } })).status, 200);
+  assert.equal((await orgAdmin('/api/users/test-admin/suspend', { method: 'POST', body: { suspended: true } })).status, 403);
+  assert.equal((await admin('/api/users/test-admin/suspend', { method: 'POST', body: { suspended: true } })).status, 400);
+  assert.equal((await orgAdmin('/api/users/test-user/suspend', { method: 'POST', body: { suspended: true } })).status, 403);
+  assert.equal((await admin('/api/users/test-user/suspend', { method: 'POST', body: { suspended: true } })).status, 200);
   assert.equal((await user('/api/auth/me')).status, 401, 'existing sessions end on suspension');
-  assert.equal((await post('/api/auth/login', { email: ACCOUNTS.user, password: DEMO_PASSWORD })).status, 403);
-  assert.equal((await admin('/api/users/demo-user/suspend', { method: 'POST', body: { suspended: false } })).status, 200);
+  assert.equal((await post('/api/auth/login', { email: ACCOUNTS.user, password: TEST_PASSWORD })).status, 403);
+  assert.equal((await admin('/api/users/test-user/suspend', { method: 'POST', body: { suspended: false } })).status, 200);
   assert.equal((await (await signIn('user'))('/api/auth/me')).status, 200);
-  assert.equal((await admin('/api/users/demo-org-admin/suspend', { method: 'POST', body: { suspended: true } })).status, 200);
+  assert.equal((await admin('/api/users/test-org-admin/suspend', { method: 'POST', body: { suspended: true } })).status, 200);
   assert.equal((await orgAdmin('/api/auth/me')).status, 401);
-  assert.equal((await admin('/api/users/demo-org-admin/suspend', { method: 'POST', body: { suspended: false } })).status, 200);
+  assert.equal((await admin('/api/users/test-org-admin/suspend', { method: 'POST', body: { suspended: false } })).status, 200);
 });
 
 test('org admins can approve or reject content, and nothing else', async () => {
@@ -190,16 +196,29 @@ test('org admins can approve or reject content, and nothing else', async () => {
   assert.equal((await user(`/api/content/${json.id}`, { method: 'DELETE' })).status, 403);
   assert.equal((await orgAdmin('/api/users')).status, 403);
   assert.equal((await orgAdmin('/api/audit')).status, 403);
-  assert.equal((await orgAdmin('/api/users/demo-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 403);
+  assert.equal((await orgAdmin('/api/users/test-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 403);
   assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE' })).status, 200);
 });
 
 test('storage management is restricted to site admins', async () => {
   const orgAdmin = await signIn('org_admin');
   const admin = await signIn('site_admin');
-  assert.equal((await orgAdmin('/api/storage', { method: 'POST', body: { name: 'X', folderId: 'abc', kind: 'oauth', types: ['image'] } })).status, 403);
+  assert.equal((await orgAdmin('/api/storage', { method: 'POST', body: { name: 'X', folderId: 'abc', kind: 'oauth' } })).status, 403);
   const storage = await admin('/api/storage');
   assert.equal(storage.status, 200);
   assert.ok(Array.isArray(storage.json.nodes));
+  assert.equal(storage.json.setup.redirectUri.endsWith('/api/auth/google/callback'), true);
   assert.equal((await admin('/api/audit')).status, 200);
+});
+
+test('drives can be registered before Google is configured and accept every file type', async () => {
+  const admin = await signIn('site_admin');
+  const body = { name: 'Media Drive 1', folderId: '1_bvFEEuo__VMC85oVlk49a3f6XUTjIH3', kind: 'oauth' };
+  const created = await admin('/api/storage', { method: 'POST', body });
+  assert.equal(created.status, 201);
+  assert.equal((await admin('/api/storage', { method: 'POST', body })).status, 409);
+  const node = (await admin('/api/storage')).json.nodes.find(n => n.id === created.json.id);
+  assert.equal(node.connected, false);
+  assert.equal('types' in node, false);
+  assert.equal((await admin(`/api/storage/${node.id}`, { method: 'DELETE' })).status, 200);
 });

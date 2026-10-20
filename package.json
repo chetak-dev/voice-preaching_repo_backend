@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "start": "node server/index.js",
+    "make-admin": "node server/make-admin.js",
     "test": "node --test server/platform.test.js"
   },
   "dependencies": {

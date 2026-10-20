@@ -11,6 +11,7 @@ import { openDatabase, audit, hashPassword, verifyPassword } from './db.js';
 import { createStorage, driveClient, encryptToken, isConnected, oauthClient, refreshQuota } from './storage.js';
 
 const TYPES = ['image', 'video', 'audio', 'doc', 'link'];
+const FILE_TYPES = TYPES.filter(type => type !== 'link');
 const MIME_TYPES = {
   'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image',
   'video/mp4': 'video', 'video/webm': 'video',
@@ -41,7 +42,7 @@ function configuration(overrides) {
   const production = process.env.NODE_ENV === 'production';
   const config = {
     production,
-    demo: process.env.DEMO_MODE === 'true',
+    trustProxy: Number(process.env.TRUST_PROXY ?? (production ? 1 : 0)),
     origin: process.env.APP_ORIGIN || 'http://localhost:5173',
     dataDir: path.resolve(process.env.DATA_DIR || 'data'),
     googleClientId: process.env.GOOGLE_CLIENT_ID || '',
@@ -52,7 +53,6 @@ function configuration(overrides) {
     maxUploadMB: Number(process.env.MAX_UPLOAD_MB || 100),
     ...overrides,
   };
-  if (config.production && config.demo) throw new Error('Demo mode is forbidden in production.');
   if (new URL(config.origin).origin !== config.origin) throw new Error('APP_ORIGIN must be an origin without a trailing slash.');
   if (config.production && !config.origin.startsWith('https://')) throw new Error('Production APP_ORIGIN must use HTTPS.');
   if (config.production && (!config.googleClientId || !config.googleClientSecret || !config.siteAdmins.length)) {
@@ -60,6 +60,9 @@ function configuration(overrides) {
   }
   if (!Number.isInteger(config.maxUploadMB) || config.maxUploadMB < 1 || config.maxUploadMB > 1024) {
     throw new Error('MAX_UPLOAD_MB must be an integer between 1 and 1024.');
+  }
+  if (!Number.isInteger(config.trustProxy) || config.trustProxy < 0 || config.trustProxy > 10) {
+    throw new Error('TRUST_PROXY must be the number of proxies in front of the server (0-10).');
   }
   return config;
 }
@@ -89,13 +92,15 @@ async function verifyFile(file) {
 export function createApp(overrides = {}) {
   const config = configuration(overrides);
   const app = express();
-  const db = openDatabase(config.dataDir, config.demo);
+  const db = openDatabase(config.dataDir);
   const storage = createStorage(config, db);
-  const tempDir = path.join(config.dataDir, config.demo ? 'demo-tmp' : 'tmp');
+  const tempDir = path.join(config.dataDir, 'tmp');
   mkdirSync(tempDir, { recursive: true });
   app.locals.db = db;
   app.locals.config = config;
   app.disable('x-powered-by');
+  // Hosting platforms terminate HTTPS at a proxy; trust it so client IPs and rate limits are correct.
+  if (config.trustProxy) app.set('trust proxy', config.trustProxy);
   app.use((req, res, next) => {
     res.set({
       'X-Content-Type-Options': 'nosniff',
@@ -144,7 +149,7 @@ export function createApp(overrides = {}) {
     message: { error: 'Too many sign-in attempts. Please try again later.' } });
 
   app.get('/api/config', (req, res) => res.json({
-    demo: config.demo, googleConfigured: Boolean(config.googleClientId && config.googleClientSecret),
+    googleConfigured: Boolean(config.googleClientId && config.googleClientSecret),
     maxUploadMB: config.maxUploadMB,
   }));
   app.get('/api/health', (req, res) => res.json({ ok: true }));
@@ -298,7 +303,7 @@ export function createApp(overrides = {}) {
   app.get('/api/storage', (req, res) => {
     const rows = db.prepare('SELECT * FROM drives ORDER BY created_at').all();
     const nodes = rows.map(node => ({
-      id: node.id, name: node.name, kind: node.kind, types: JSON.parse(node.types),
+      id: node.id, name: node.name, kind: node.kind,
       connected: isConnected(node, config), enabled: Boolean(node.enabled),
       ...(req.user.role === 'site_admin' ? {
         folderId: node.folder_id, accountEmail: node.account_email,
@@ -307,10 +312,16 @@ export function createApp(overrides = {}) {
       fileCount: db.prepare('SELECT count(*) AS n FROM content WHERE storage_node = ?').get(node.id).n,
     }));
     res.json({
-      nodes, local: { id: 'local', name: 'Local workspace', kind: 'local', types: TYPES.filter(type => type !== 'link'), connected: true,
+      nodes, local: { id: 'local', name: 'Local workspace', kind: 'local', connected: true,
         fileCount: db.prepare("SELECT count(*) AS n FROM content WHERE storage_node = 'local'").get().n },
       oauthReady: Boolean(config.googleClientId && config.googleClientSecret && /^[a-fA-F0-9]{64}$/.test(config.encryptionKey)),
       serviceReady: Boolean(config.serviceAccount),
+      setup: {
+        googleClient: Boolean(config.googleClientId && config.googleClientSecret),
+        encryptionKey: /^[a-fA-F0-9]{64}$/.test(config.encryptionKey),
+        serviceAccount: Boolean(config.serviceAccount),
+        redirectUri: `${config.origin}/api/auth/google/callback`,
+      },
     });
   });
   const upload = multer({
@@ -334,7 +345,7 @@ export function createApp(overrides = {}) {
         const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
         if (!['auto', 'local'].includes(target)) {
           const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(target);
-          if (!node || !JSON.parse(node.types).includes(type)) throw fail(400, 'This storage destination does not accept that file type.');
+          if (!node) throw fail(400, 'Storage destination not found.');
           if (!isConnected(node, config)) throw fail(400, 'This storage destination is not connected yet.');
         }
         stored = await storage.save(req.file, type, target);
@@ -451,22 +462,17 @@ export function createApp(overrides = {}) {
     const folderId = text(req.body.folderId, 'Folder ID', 200);
     if (!/^[A-Za-z0-9_-]+$/.test(folderId)) throw fail(400, 'Enter a Google Drive folder ID, not its full URL.');
     if (!['oauth', 'service'].includes(req.body.kind)) throw fail(400, 'Choose a storage connection type.');
-    if (!Array.isArray(req.body.types) || !req.body.types.length ||
-      req.body.types.some(type => !TYPES.includes(type) || type === 'link')) throw fail(400, 'Choose at least one supported file type.');
-    if (req.body.kind === 'oauth' && !/^[a-fA-F0-9]{64}$/.test(config.encryptionKey)) {
-      throw fail(503, 'Configure a 64-character hex STORAGE_ENCRYPTION_KEY before connecting personal Drives.');
-    }
-    if (req.body.kind === 'service' && !config.serviceAccount) throw fail(503, 'Configure GOOGLE_APPLICATION_CREDENTIALS before adding a Shared Drive.');
+    if (db.prepare('SELECT 1 FROM drives WHERE folder_id = ?').get(folderId)) throw fail(409, 'This folder is already registered.');
     const id = randomUUID();
     db.prepare(`INSERT INTO drives (id,name,folder_id,kind,types,created_at) VALUES (?,?,?,?,?,?)`)
-      .run(id, name, folderId, req.body.kind, JSON.stringify([...new Set(req.body.types)]), new Date().toISOString());
+      .run(id, name, folderId, req.body.kind, JSON.stringify(FILE_TYPES), new Date().toISOString());
     audit(db, req.user.id, 'Added storage destination', name);
     res.status(201).json({ id });
   });
   app.get('/api/storage/:id/connect', siteAdmin, (req, res) => {
     const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(req.params.id);
     if (!node || node.kind !== 'oauth') throw fail(404, 'Personal Drive destination not found.');
-    if (!/^[a-fA-F0-9]{64}$/.test(config.encryptionKey)) throw fail(503, 'Configure STORAGE_ENCRYPTION_KEY first.');
+    if (!/^[a-fA-F0-9]{64}$/.test(config.encryptionKey)) throw fail(503, 'Set a 64-character hex STORAGE_ENCRYPTION_KEY in .env and restart the server.');
     beginOAuth(req, res, 'drive', node.id);
   });
   app.post('/api/storage/:id/test', siteAdmin, asyncRoute(async (req, res) => {
@@ -486,14 +492,8 @@ export function createApp(overrides = {}) {
     const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(req.params.id);
     if (!node) throw fail(404, 'Storage destination not found.');
     const name = req.body.name === undefined ? node.name : text(req.body.name, 'Storage name', 100);
-    let types = JSON.parse(node.types);
-    if (req.body.types !== undefined) {
-      if (!Array.isArray(req.body.types) || !req.body.types.length ||
-        req.body.types.some(type => !TYPES.includes(type) || type === 'link')) throw fail(400, 'Choose at least one supported file type.');
-      types = [...new Set(req.body.types)];
-    }
     const enabled = req.body.enabled === undefined ? node.enabled : req.body.enabled ? 1 : 0;
-    db.prepare('UPDATE drives SET name = ?, types = ?, enabled = ? WHERE id = ?').run(name, JSON.stringify(types), enabled, node.id);
+    db.prepare('UPDATE drives SET name = ?, enabled = ? WHERE id = ?').run(name, enabled, node.id);
     audit(db, req.user.id, 'Updated storage destination', name);
     res.json({ ok: true });
   });

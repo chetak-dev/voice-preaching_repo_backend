@@ -14,26 +14,22 @@ A professional content-sharing platform for communities. Members contribute **im
 - **Multi-Google-Drive storage** — connect as many Drives as you need; uploads are routed automatically (see below).
 - Sign up / sign in with email + password or Google (one sign-in page for every role), scrypt-hashed passwords, file signature verification, rate limiting, CSRF origin checks, encrypted refresh tokens, audit log.
 
-## Quick start (demo mode)
+## Quick start (local)
 
 Requires **Node.js 22.13+** (uses the built-in `node:sqlite`).
 
 ```bash
 npm install
-cp .env.example .env          # then set DEMO_MODE=true
+cp .env.example .env          # fill in the values (see below)
 npm run server                # API on http://localhost:4000
 npm run dev                   # UI on  http://localhost:5173
 ```
 
-Demo mode seeds sample content and three accounts (password `demo-password` for all):
+The site starts empty. To create the first site admin, either list your email in `SITE_ADMIN_EMAILS` and use **Continue with Google**, or sign up with email + password and then run:
 
-| Email | Role |
-|-------|------|
-| `admin@example.test` | Site admin |
-| `orgadmin@example.test` | Org admin |
-| `member@example.test` | Member |
-
-Never enable demo mode in production.
+```bash
+npm run make-admin -- you@example.com
+```
 
 > Behind a corporate TLS proxy, if `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, set `NODE_USE_SYSTEM_CA=1` so Node trusts the operating system's certificate store.
 
@@ -56,11 +52,11 @@ Everyone uses the same sign-in page; what they see depends on their role.
 Each free Google account offers 15 GB. The platform treats every Drive folder as a **storage destination** and spreads uploads across them.
 
 1. In each Google account, create a folder (e.g. `VOICE Media`).
-2. Sign in as a site admin → **Storage** → **Add Google Drive**. Paste the folder link, give it a name, and choose which file types it should accept (e.g. one Drive for video, another for audio + documents).
+2. Sign in as a site admin → **Storage** → **Add Google Drive**. Paste the folder link and give it a name. Every Drive accepts all file types. (You can register Drives before the Google settings below are configured; they show *Needs connection* until then.)
 3. Click **Connect** and sign in with the Google account that owns that folder. A refresh token is stored encrypted with `STORAGE_ENCRYPTION_KEY`.
 4. Click **Test** to verify access and read the Drive's quota.
 
-**Routing:** for each upload, the server picks the *active, connected* Drive that accepts the file type and has the most free space (quota is cached for 5 minutes). When a Drive is nearly full, **Pause** it — existing files stay available, new uploads go elsewhere. If no Drive accepts a type, the file is stored locally on the server (`DATA_DIR/files`). Site admins can also choose a specific destination when uploading.
+**Routing:** for each upload, the server picks the *active, connected* Drive with the most free space (quota is cached for 5 minutes). When a Drive is nearly full, **Pause** it — existing files stay available, new uploads go elsewhere. If no Drive is connected, the file is stored locally on the server (`DATA_DIR/files`). Site admins can also choose a specific destination when uploading.
 
 **Workspace Shared Drives** are also supported: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key, add the service account as a member of the Shared Drive, and choose *Workspace Shared Drive* when adding storage.
 
@@ -74,6 +70,48 @@ NODE_ENV=production npm start
 ```
 
 Production requires HTTPS `APP_ORIGIN`, Google OAuth credentials and `SITE_ADMIN_EMAILS`. Run behind a reverse proxy (nginx, Caddy) and back up `DATA_DIR` (SQLite database + local files).
+
+### Free hosting: Oracle Cloud Always Free (recommended)
+
+The app needs a persistent disk for its SQLite database, so a small always-on VM is the best free option (Render/Vercel free tiers wipe the disk on restart).
+
+1. Create an Oracle Cloud account and launch an **Always Free** Ubuntu 24.04 VM (Ampere A1 or E2.1.Micro). In the VM's subnet security list, allow inbound TCP **80** and **443**.
+2. Point a domain at the VM's public IP (any domain, or a free subdomain from e.g. DuckDNS).
+3. On the VM:
+   ```bash
+   sudo apt update && sudo apt install -y git caddy
+   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
+   sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT && sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+   sudo netfilter-persistent save
+   git clone https://github.com/chetak-dev/voice-preaching_repo_backend.git voice && cd voice
+   npm ci && npm run build
+   cp .env.example .env && nano .env   # NODE_ENV=production, APP_ORIGIN=https://your-domain, Google keys, etc.
+   ```
+4. Caddy gives you free automatic HTTPS. Put this in `/etc/caddy/Caddyfile` and run `sudo systemctl reload caddy`:
+   ```
+   your-domain.com {
+     reverse_proxy 127.0.0.1:4000
+   }
+   ```
+5. Keep the app running with systemd: create `/etc/systemd/system/voice.service`:
+   ```ini
+   [Unit]
+   Description=VOICE
+   After=network.target
+
+   [Service]
+   WorkingDirectory=/home/ubuntu/voice
+   ExecStart=/usr/bin/node server/index.js
+   Restart=always
+   User=ubuntu
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+   then `sudo systemctl enable --now voice`.
+6. In Google Cloud Console add `https://your-domain.com` as an authorized JavaScript origin and `https://your-domain.com/api/auth/google/callback` as a redirect URI.
+
+To update later: `git pull && npm ci && npm run build && sudo systemctl restart voice`.
 
 ## Tests
 

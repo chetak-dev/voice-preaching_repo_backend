@@ -129,7 +129,6 @@ function Shell({ user, config, onSignOut }) {
           })}
         </nav>
         <div className="relative m-4 rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-          {config?.demo && <p className="mb-3 rounded-lg bg-amber-400/15 px-3 py-1.5 text-[11px] font-medium text-amber-200">Demo mode — sample data only</p>}
           <div className="flex items-center gap-3">
             <Avatar name={user.name} />
             <div className="min-w-0 flex-1">
@@ -220,7 +219,6 @@ function Shell({ user, config, onSignOut }) {
                 })}
               </div>
             )}
-            {config?.demo && <p className="mx-5 mb-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">Demo mode — sample data only.</p>}
             <div className="border-t border-slate-100 p-3">
               <button type="button" onClick={onSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50">
                 <LogOut className="h-5 w-5" /> Sign out

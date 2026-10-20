@@ -82,7 +82,7 @@ export default function Upload({ user, config, navigate, onChanged }) {
     );
   }
 
-  const destinations = storage ? [storage.local, ...storage.nodes].filter(node => node.connected && (!fileType || node.types.includes(fileType))) : [];
+  const destinations = storage ? [storage.local, ...storage.nodes].filter(node => node.connected) : [];
 
   return (
     <div className="mx-auto max-w-3xl">

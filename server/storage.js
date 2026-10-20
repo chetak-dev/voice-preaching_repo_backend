@@ -61,7 +61,7 @@ export async function refreshQuota(db, node, config) {
 }
 
 export function createStorage(config, db) {
-  const filesDir = path.join(config.dataDir, config.demo ? 'demo-files' : 'files');
+  const filesDir = path.join(config.dataDir, 'files');
   mkdirSync(filesDir, { recursive: true });
 
   async function freeSpace(node) {
@@ -74,7 +74,7 @@ export function createStorage(config, db) {
 
   async function route(type, size) {
     const candidates = db.prepare('SELECT * FROM drives WHERE enabled = 1 ORDER BY created_at').all()
-      .filter(node => JSON.parse(node.types).includes(type) && isConnected(node, config));
+      .filter(node => isConnected(node, config));
     if (!candidates.length) return null;
     let best = null;
     for (const node of candidates) {
@@ -85,7 +85,7 @@ export function createStorage(config, db) {
         console.warn(`Skipping storage "${node.name}" during routing:`, error.message);
       }
     }
-    if (!best) throw fail(507, 'Every Google Drive that accepts this file type is full or unreachable. Ask a site admin to add storage.');
+    if (!best) throw fail(507, 'Every connected Google Drive is full or unreachable. Ask a site admin to add storage.');
     return best.node;
   }
 

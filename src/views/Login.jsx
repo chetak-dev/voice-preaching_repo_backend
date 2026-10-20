@@ -86,7 +86,7 @@ export default function Login({ config, onSignedIn }) {
   return (
     <div className="flex min-h-screen flex-col bg-voice lg:grid lg:grid-cols-[1.1fr_1fr] lg:bg-none">
       {/* Brand panel: full hero on desktop, compact app header on mobile */}
-      <div className="pt-safe relative overflow-hidden bg-voice px-6 pb-16 pt-10 text-white lg:flex lg:flex-col lg:p-14">
+      <div className="relative overflow-hidden bg-voice px-6 pb-16 pt-[max(2.5rem,env(safe-area-inset-top))] text-white lg:flex lg:flex-col lg:p-14">
         <div className="pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-white/10 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-32 -left-16 h-96 w-96 rounded-full bg-amber-300/20 blur-3xl" />
         <div className="relative"><Logo size="lg" light /></div>
@@ -110,7 +110,7 @@ export default function Login({ config, onSignedIn }) {
       </div>
 
       {/* Form: rounded sheet on mobile, centered column on desktop */}
-      <div className="pb-safe relative -mt-8 flex flex-1 justify-center rounded-t-[2rem] bg-slate-50 px-6 pb-10 pt-8 shadow-nav lg:mt-0 lg:items-center lg:rounded-none lg:bg-white lg:py-12 lg:shadow-none">
+      <div className="relative -mt-8 flex flex-1 justify-center rounded-t-[2rem] bg-slate-50 px-6 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-8 shadow-nav lg:mt-0 lg:items-center lg:rounded-none lg:bg-white lg:py-12 lg:shadow-none">
         <div className="w-full max-w-sm">
           <div className="mb-6 grid grid-cols-2 rounded-2xl bg-slate-200/60 p-1 lg:bg-slate-100" role="tablist">
             {[['signin', 'Sign in'], ['signup', 'Sign up']].map(([id, label]) => (
