@@ -1,0 +1,281 @@
+{
+  "driveNodes": [
+    {
+      "id": "drive-1",
+      "name": "Drive Node #1 • High-Res Media Vault",
+      "email": "sarvajna.media.vault01@gmail.com",
+      "folderId": "1A9x_MediaVault_992kLpQ",
+      "usedGB": 13.8,
+      "totalGB": 15,
+      "status": "online",
+      "primaryFor": [
+        "image",
+        "video"
+      ],
+      "filesCount": 14280,
+      "lastSync": "2 mins ago",
+      "color": "from-orange-500 to-amber-500"
+    },
+    {
+      "id": "drive-2",
+      "name": "Drive Node #2 • Scriptures & Docs Archive",
+      "email": "sarvajna.docs.archive02@gmail.com",
+      "folderId": "1B7y_DocsArchive_441mNzR",
+      "usedGB": 11.4,
+      "totalGB": 15,
+      "status": "online",
+      "primaryFor": [
+        "doc"
+      ],
+      "filesCount": 8334,
+      "lastSync": "5 mins ago",
+      "color": "from-purple-500 to-indigo-500"
+    },
+    {
+      "id": "drive-3",
+      "name": "Drive Node #3 • Audio & Lecture Streams",
+      "email": "sarvajna.audio.library03@gmail.com",
+      "folderId": "1C4z_AudioStreams_883vBxW",
+      "usedGB": 9.2,
+      "totalGB": 15,
+      "status": "online",
+      "primaryFor": [
+        "audio"
+      ],
+      "filesCount": 6410,
+      "lastSync": "Just now",
+      "color": "from-emerald-500 to-teal-500"
+    },
+    {
+      "id": "drive-4",
+      "name": "Drive Node #4 • Team Enterprise Workspace",
+      "email": "workspace@sarvajnateam.org",
+      "folderId": "0AD9_EnterprisePool_001xYz",
+      "usedGB": 563.98,
+      "totalGB": 1000,
+      "status": "online",
+      "primaryFor": [
+        "link",
+        "video",
+        "image"
+      ],
+      "filesCount": 5329,
+      "lastSync": "1 min ago",
+      "color": "from-blue-500 to-cyan-500"
+    }
+  ],
+  "items": [
+    {
+      "id": "item-1",
+      "title": "Shikshashtkam-8.pdf",
+      "description": "Comprehensive visual presentation on the ultimate goal of life, comparing intermediate objectives with spiritual & team excellence.",
+      "type": "doc",
+      "format": "PDF",
+      "size": "12.66 MB",
+      "sizeMB": 12.66,
+      "views": 42,
+      "likes": 19,
+      "uploadedAt": "Apr 11, 2026",
+      "uploader": "Keshav Nimai",
+      "uploaderRole": "Content Curator",
+      "driveNodeId": "drive-2",
+      "driveFileId": "1H8k_Shikshashtkam8_PDF",
+      "tags": [
+        "Presentation",
+        "Philosophy",
+        "Goal Setting",
+        "Slides"
+      ],
+      "bookmarked": true,
+      "thumbnail": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=900&q=80",
+      "pages": [
+        {
+          "pageNumber": 1,
+          "caption": "Ultimate Goal of Life — Siksastakam Verse 8 Overview",
+          "imageUrl": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1000&q=80",
+          "notes": "Introduction to devotional synthesis and clarity of purpose across collaborative spiritual projects."
+        },
+        {
+          "pageNumber": 2,
+          "caption": "Difference Between Goal & Objective — Stepping Stones",
+          "imageUrl": "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1000&q=80",
+          "notes": "Intermediate objectives act as measurable milestones leading up to the ultimate collective goal."
+        },
+        {
+          "pageNumber": 3,
+          "caption": "Team Alignment: Focusing on the Goal Post",
+          "imageUrl": "https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1000&q=80",
+          "notes": "Just as every player on a football pitch coordinates toward the goal post, every team asset supports our shared mission."
+        }
+      ]
+    },
+    {
+      "id": "item-2",
+      "title": "Aditi_Worships_Lord_Visnu_G.jpg",
+      "description": "High-resolution traditional artwork scan restored for print banners and digital publications.",
+      "type": "image",
+      "format": "JPEG",
+      "size": "30.3 MB",
+      "sizeMB": 30.3,
+      "views": 15,
+      "likes": 11,
+      "uploadedAt": "Oct 14, 2026",
+      "uploader": "Kadamb Kanana",
+      "uploaderRole": "Visual Archivist",
+      "driveNodeId": "drive-1",
+      "driveFileId": "1J2m_AditiVisnu_HR",
+      "tags": [
+        "Artwork",
+        "High-Res",
+        "Vedic Heritage",
+        "Illustration"
+      ],
+      "bookmarked": true,
+      "thumbnail": "https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=900&q=80"
+    },
+    {
+      "id": "item-3",
+      "title": "jatayu 13.jpg",
+      "description": "Detailed digital painting illustrating valor and dedication, color-graded for festival media kits.",
+      "type": "image",
+      "format": "JPEG",
+      "size": "4.1 MB",
+      "sizeMB": 4.1,
+      "views": 10,
+      "likes": 8,
+      "uploadedAt": "Oct 15, 2026",
+      "uploader": "Keshav Nimai",
+      "uploaderRole": "Content Curator",
+      "driveNodeId": "drive-1",
+      "driveFileId": "1P9x_Jatayu13_Art",
+      "tags": [
+        "Ramayana",
+        "Illustration",
+        "Festival Kit"
+      ],
+      "bookmarked": false,
+      "thumbnail": "https://images.unsplash.com/photo-1578301978693-85fa9c0320b9?auto=format&fit=crop&w=900&q=80"
+    },
+    {
+      "id": "item-4",
+      "title": "jatayu n Ravana.jpg",
+      "description": "Epic scene composition prepared for storytelling slideshows and youth workshop presentations.",
+      "type": "image",
+      "format": "JPEG",
+      "size": "3.8 MB",
+      "sizeMB": 3.8,
+      "views": 8,
+      "likes": 6,
+      "uploadedAt": "Oct 16, 2026",
+      "uploader": "Keshav Nimai",
+      "uploaderRole": "Content Curator",
+      "driveNodeId": "drive-1",
+      "driveFileId": "1Q4z_JatayuRavana_01",
+      "tags": [
+        "Storytelling",
+        "Painting",
+        "Archive"
+      ],
+      "bookmarked": false,
+      "thumbnail": "https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?auto=format&fit=crop&w=900&q=80"
+    },
+    {
+      "id": "item-5",
+      "title": "Morning_Vedic_Flute_Meditation.mp3",
+      "description": "Lossless studio recording of bamboo flute and tanpura ambience for team videos, podcasts, and intros.",
+      "type": "audio",
+      "format": "MP3",
+      "size": "18.4 MB",
+      "sizeMB": 18.4,
+      "duration": "06:42",
+      "views": 64,
+      "likes": 31,
+      "uploadedAt": "Oct 17, 2026",
+      "uploader": "Radhika Devi",
+      "uploaderRole": "Audio Producer",
+      "driveNodeId": "drive-3",
+      "driveFileId": "1M7a_FluteMeditation_HQ",
+      "tags": [
+        "Audio",
+        "Soundtrack",
+        "Royalty-Free",
+        "Instrumental"
+      ],
+      "bookmarked": true,
+      "thumbnail": "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=900&q=80"
+    },
+    {
+      "id": "item-6",
+      "title": "Annual_Heritage_Documentary_Cut.mp4",
+      "description": "4K b-roll compilation of temple architecture, lamps, and cultural gatherings filmed for the upcoming outreach campaign.",
+      "type": "video",
+      "format": "MP4",
+      "size": "142.8 MB",
+      "sizeMB": 142.8,
+      "duration": "03:18",
+      "views": 89,
+      "likes": 47,
+      "uploadedAt": "Oct 18, 2026",
+      "uploader": "Govinda Das",
+      "uploaderRole": "Video Director",
+      "driveNodeId": "drive-4",
+      "driveFileId": "1V5c_HeritageDoc_4K",
+      "tags": [
+        "4K Video",
+        "B-Roll",
+        "Outreach",
+        "Documentary"
+      ],
+      "bookmarked": false,
+      "thumbnail": "https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?auto=format&fit=crop&w=900&q=80"
+    },
+    {
+      "id": "item-7",
+      "title": "Vedic Art & Iconography Reference Portal",
+      "description": "Curated external resource hub containing high-resolution color palettes, Sanskrit typography rules, and historical references.",
+      "type": "link",
+      "format": "LINK",
+      "size": "External URL",
+      "sizeMB": 0.05,
+      "externalUrl": "https://archive.org/details/indian-art-heritage",
+      "views": 53,
+      "likes": 28,
+      "uploadedAt": "Oct 18, 2026",
+      "uploader": "Prabhu Nanda",
+      "uploaderRole": "Lead Designer",
+      "driveNodeId": "drive-4",
+      "driveFileId": "1L9w_Shortcut_RefPortal",
+      "tags": [
+        "Reference",
+        "Design System",
+        "Beneficial Link",
+        "Typography"
+      ],
+      "bookmarked": true,
+      "thumbnail": "https://images.unsplash.com/photo-1457369804613-52c61a468e7d?auto=format&fit=crop&w=900&q=80"
+    },
+    {
+      "id": "item-8",
+      "title": "jatayu n Ravana 2.jpg",
+      "description": "Golden-hour variant artwork optimized for vertical mobile stories and social cards.",
+      "type": "image",
+      "format": "JPEG",
+      "size": "2.5 MB",
+      "sizeMB": 2.5,
+      "views": 12,
+      "likes": 9,
+      "uploadedAt": "Oct 19, 2026",
+      "uploader": "Kadamb Kanana",
+      "uploaderRole": "Visual Archivist",
+      "driveNodeId": "drive-1",
+      "driveFileId": "1K3n_JatayuRavana_02",
+      "tags": [
+        "Social Media",
+        "Vertical Art",
+        "JPEG"
+      ],
+      "bookmarked": false,
+      "thumbnail": "https://images.unsplash.com/photo-1577083552431-6e5fd01aa342?auto=format&fit=crop&w=900&q=80"
+    }
+  ]
+}
