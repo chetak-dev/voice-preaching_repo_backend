@@ -1,13 +1,18 @@
 {
-  "name": "sarvajna-team-content-hub",
+  "name": "voice-content-hub",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "server": "node server/index.js"
+    "server": "node server/index.js",
+    "start": "node server/index.js",
+    "test": "node --test server/platform.test.js"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -15,8 +20,8 @@
     "lucide-react": "^0.454.0",
     "express": "^4.21.1",
     "googleapis": "^144.0.0",
-    "multer": "^1.4.5-lts.1",
-    "cors": "^2.8.5",
+    "multer": "^2.0.2",
+    "express-rate-limit": "^8.1.0",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {

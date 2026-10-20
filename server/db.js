@@ -1,0 +1,120 @@
+import { DatabaseSync } from 'node:sqlite';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+
+const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+export function hashPassword(password) {
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, 64, SCRYPT);
+  return `scrypt$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+
+// A fixed dummy hash keeps response timing similar when the account does not exist.
+const DUMMY_HASH = hashPassword(randomBytes(16).toString('hex'));
+
+export function verifyPassword(password, stored) {
+  const [scheme, salt, hash] = (stored || DUMMY_HASH).split('$');
+  if (scheme !== 'scrypt' || !salt || !hash) return false;
+  const expected = Buffer.from(hash, 'base64');
+  const actual = scryptSync(password, Buffer.from(salt, 'base64'), expected.length, SCRYPT);
+  return timingSafeEqual(actual, expected) && Boolean(stored);
+}
+
+export function openDatabase(directory, demo) {
+  mkdirSync(directory, { recursive: true });
+  const db = new DatabaseSync(path.join(directory, demo ? 'demo.sqlite' : 'platform.sqlite'));
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('site_admin','org_admin','user')),
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      hash TEXT PRIMARY KEY, purpose TEXT NOT NULL, user_id TEXT, node_id TEXT,
+      verifier TEXT NOT NULL, expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS drives (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, folder_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('oauth','service')),
+      types TEXT NOT NULL, refresh_token TEXT, account_email TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS content (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
+      type TEXT NOT NULL, mime TEXT, original_name TEXT, size INTEGER NOT NULL DEFAULT 0,
+      storage_node TEXT, storage_key TEXT, url TEXT,
+      status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
+      uploader_id TEXT NOT NULL REFERENCES users(id),
+      reviewed_by TEXT REFERENCES users(id), review_note TEXT, reviewed_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS content_status ON content(status, created_at);
+    CREATE TABLE IF NOT EXISTS bookmarks (
+      user_id TEXT NOT NULL REFERENCES users(id), content_id TEXT NOT NULL REFERENCES content(id),
+      PRIMARY KEY(user_id, content_id)
+    );
+    CREATE TABLE IF NOT EXISTS audit (
+      id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id),
+      action TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+  `);
+  const addColumns = (table, columns) => {
+    const existing = db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name);
+    for (const [name, definition] of columns) {
+      if (!existing.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  };
+  addColumns('users', [
+    ['password_hash', 'TEXT'],
+    ['google_linked', 'INTEGER NOT NULL DEFAULT 0'],
+    ['suspended', 'INTEGER NOT NULL DEFAULT 0'],
+  ]);
+  addColumns('drives', [
+    ['enabled', 'INTEGER NOT NULL DEFAULT 1'],
+    ['quota_usage', 'INTEGER'],
+    ['quota_limit', 'INTEGER'],
+    ['quota_checked_at', 'INTEGER'],
+  ]);
+  if (demo && !db.prepare('SELECT id FROM users LIMIT 1').get()) seedDemo(db);
+  return db;
+}
+
+export function audit(db, actorId, action, subject) {
+  db.prepare('INSERT INTO audit VALUES (?, ?, ?, ?, ?)')
+    .run(randomUUID(), actorId, action, subject, new Date().toISOString());
+}
+
+export const DEMO_PASSWORD = 'demo-password';
+
+function seedDemo(db) {
+  const now = new Date().toISOString();
+  const insertUser = db.prepare(`INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)`);
+  const password = hashPassword(DEMO_PASSWORD);
+  insertUser.run('demo-admin', 'admin@example.test', 'Ananya Sharma', 'site_admin', now, password);
+  insertUser.run('demo-org-admin', 'orgadmin@example.test', 'Keshav Nimai', 'org_admin', now, password);
+  insertUser.run('demo-user', 'member@example.test', 'Radhika Devi', 'user', now, password);
+  const samples = [
+    ['A little space for deeper learning', 'A curated starting point for exploring texts, ideas, and our shared cultural heritage.', 'https://archive.org', 'approved'],
+    ['The art of thoughtful storytelling', 'References and inspiration for your next community workshop.', 'https://www.si.edu', 'approved'],
+    ['Our living heritage', 'Explore collections that bring art, history, and culture together.', 'https://artsandculture.google.com', 'approved'],
+    ['Knowledge worth sharing', 'An open library of books and resources for lifelong learners.', 'https://openlibrary.org', 'approved'],
+    ['A world of sound', 'Discover recordings and sound collections from around the world.', 'https://www.loc.gov/audio/', 'approved'],
+    ['Make your next gathering meaningful', 'A collection of educational resources for facilitators and community teams.', 'https://www.unesco.org', 'approved'],
+    ['Community workshop resources', 'A new contribution ready for an admin to review.', 'https://www.wikipedia.org', 'pending'],
+    ['Ideas for our next chapter', 'Learning resources submitted by a member of the community.', 'https://www.edx.org', 'pending'],
+  ];
+  const insert = db.prepare(`INSERT INTO content
+    (id,title,description,type,url,status,uploader_id,created_at) VALUES (?,?,?,?,?,?,?,?)`);
+  samples.forEach(([title, description, url, status], i) => {
+    insert.run(`demo-content-${i}`, title, description, 'link', url, status,
+      i % 2 ? 'demo-user' : 'demo-org-admin', new Date(Date.now() - i * 86400000).toISOString());
+  });
+}

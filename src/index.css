@@ -2,10 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
+@layer base {
+  html { -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
+  body {
+    background-color: #f8fafc;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(219, 39, 119, 0.06) 0px, transparent 45%);
+    background-attachment: fixed;
+  }
+  :focus-visible { outline: 2px solid theme('colors.brand.500'); outline-offset: 2px; }
 }
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+
+@layer components {
+  .input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400
+      shadow-sm transition focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-500/15 disabled:bg-slate-50;
+  }
+  .label { @apply mb-1.5 block text-sm font-medium text-slate-700; }
+  .card { @apply rounded-2xl border border-slate-200/70 bg-white shadow-card; }
+  .text-voice { @apply bg-voice bg-clip-text text-transparent; }
 }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+.pt-safe { padding-top: env(safe-area-inset-top); }
