@@ -1,10 +1,16 @@
 import { google } from 'googleapis';
-import { createReadStream, mkdirSync } from 'node:fs';
-import { rename, unlink } from 'node:fs/promises';
+import { existsSync, mkdirSync } from 'node:fs';
+import { appendFile, unlink, writeFile } from 'node:fs/promises';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 
+// Each upload chunk stays below Vercel's 4.5 MB request limit and is a multiple of 256 KB, as Drive requires.
+export const CHUNK_SIZE = 4 * 1024 * 1024;
+// Media range responses are capped so every response stays small; browsers request the next range automatically.
+const MAX_RANGE = 4 * 1024 * 1024;
 const QUOTA_TTL_MS = 5 * 60_000;
+const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id';
 const fail = (status, message) => Object.assign(new Error(message), { status, expose: true });
 
 export function oauthClient(config) {
@@ -30,39 +36,64 @@ export function isConnected(node, config) {
   return node.kind === 'service' ? Boolean(config.serviceAccount) : Boolean(node.refresh_token);
 }
 
-export function driveClient(node, config) {
-  let auth;
+function authFor(node, config) {
   if (node.kind === 'oauth') {
     if (!node.refresh_token) throw fail(400, 'Connect this Google Drive account first.');
-    auth = oauthClient(config);
+    const auth = oauthClient(config);
     auth.setCredentials({ refresh_token: decryptToken(node.refresh_token, config.encryptionKey) });
-  } else {
-    if (!config.serviceAccount) throw fail(400, 'Configure service account credentials first.');
-    auth = new google.auth.GoogleAuth({
-      keyFile: config.serviceAccount,
-      scopes: ['https://www.googleapis.com/auth/drive'],
-    });
+    return auth;
   }
-  return google.drive({ version: 'v3', auth });
+  if (!config.serviceAccount) throw fail(400, 'Configure service account credentials first.');
+  // GOOGLE_SERVICE_ACCOUNT_JSON holds the key itself (for serverless hosts); otherwise it is a key file path.
+  const value = config.serviceAccount.trim();
+  return new google.auth.GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/drive'],
+    ...(value.startsWith('{') ? { credentials: JSON.parse(value) } : { keyFile: value }),
+  });
+}
+
+export function driveClient(node, config) {
+  return google.drive({ version: 'v3', auth: authFor(node, config) });
+}
+
+async function accessToken(node, config) {
+  const result = await authFor(node, config).getAccessToken();
+  const token = typeof result === 'string' ? result : result?.token;
+  if (!token) throw fail(502, 'Google did not issue an access token for this Drive. Reconnect it from Storage.');
+  return token;
+}
+
+async function googleError(response, fallback) {
+  const body = await response.json().catch(() => null);
+  console.error(fallback, response.status, body?.error?.message || '');
+  return fail(502, `${fallback} (Google responded ${response.status}).`);
 }
 
 // Shared Drives draw from the Workspace pool, so they report no per-account limit.
 export async function refreshQuota(db, node, config) {
   if (node.kind === 'service') {
-    db.prepare('UPDATE drives SET quota_usage = NULL, quota_limit = NULL, quota_checked_at = ? WHERE id = ?').run(Date.now(), node.id);
+    await db.run('UPDATE drives SET quota_usage = NULL, quota_limit = NULL, quota_checked_at = ? WHERE id = ?', Date.now(), node.id);
     return { usage: null, limit: null };
   }
   const { data } = await driveClient(node, config).about.get({ fields: 'storageQuota(limit,usage)' });
   const usage = data.storageQuota?.usage ? Number(data.storageQuota.usage) : null;
   const limit = data.storageQuota?.limit ? Number(data.storageQuota.limit) : null;
-  db.prepare('UPDATE drives SET quota_usage = ?, quota_limit = ?, quota_checked_at = ? WHERE id = ?')
-    .run(usage, limit, Date.now(), node.id);
+  await db.run('UPDATE drives SET quota_usage = ?, quota_limit = ?, quota_checked_at = ? WHERE id = ?', usage, limit, Date.now(), node.id);
   return { usage, limit };
+}
+
+function boundedRange(range, size) {
+  const match = /^bytes=(\d+)-(\d*)$/.exec(range || '');
+  if (!match) return range;
+  const start = Number(match[1]);
+  const end = Math.min(match[2] ? Number(match[2]) : size - 1, start + MAX_RANGE - 1, size - 1);
+  return end >= start ? `bytes=${start}-${end}` : range;
 }
 
 export function createStorage(config, db) {
   const filesDir = path.join(config.dataDir, 'files');
-  mkdirSync(filesDir, { recursive: true });
+  if (config.localStorage) mkdirSync(filesDir, { recursive: true });
+  const localPath = key => path.join(filesDir, path.basename(key));
 
   async function freeSpace(node) {
     let { quota_usage: usage, quota_limit: limit } = node;
@@ -72,8 +103,8 @@ export function createStorage(config, db) {
     return limit == null ? Number.MAX_SAFE_INTEGER : limit - (usage || 0);
   }
 
-  async function route(type, size) {
-    const candidates = db.prepare('SELECT * FROM drives WHERE enabled = 1 ORDER BY created_at').all()
+  async function route(size) {
+    const candidates = (await db.all('SELECT * FROM drives WHERE enabled = 1 ORDER BY created_at'))
       .filter(node => isConnected(node, config));
     if (!candidates.length) return null;
     let best = null;
@@ -89,42 +120,92 @@ export function createStorage(config, db) {
     return best.node;
   }
 
+  async function destination(target, size) {
+    if (target === 'local') {
+      if (!config.localStorage) throw fail(400, 'This host has no permanent disk. Choose a Google Drive.');
+      return null;
+    }
+    if (target && target !== 'auto') {
+      const node = await db.get('SELECT * FROM drives WHERE id = ?', target);
+      if (!node) throw fail(400, 'Storage destination not found.');
+      if (!isConnected(node, config)) throw fail(400, 'This storage destination is not connected yet.');
+      return node;
+    }
+    const node = await route(size);
+    if (!node && !config.localStorage) {
+      throw fail(503, 'File uploads need a connected Google Drive. Ask a site admin to connect one under Storage.');
+    }
+    return node;
+  }
+
   return {
-    async save(file, type, nodeId) {
-      const node = nodeId && nodeId !== 'auto'
-        ? (nodeId === 'local' ? null : db.prepare('SELECT * FROM drives WHERE id = ?').get(nodeId))
-        : await route(type, file.size);
-      if (nodeId && nodeId !== 'auto' && nodeId !== 'local' && !node) throw fail(400, 'Storage destination not found.');
+    async startUpload({ id, target, name, mime, size }) {
+      const node = await destination(target, size);
       if (!node) {
-        const key = path.basename(file.path);
-        await rename(file.path, path.join(filesDir, key));
-        return { node: 'local', key };
+        await writeFile(localPath(id), '');
+        return { node: 'local', sessionUri: null };
       }
-      const result = await driveClient(node, config).files.create({
-        supportsAllDrives: true,
-        requestBody: { name: file.originalname, parents: [node.folder_id] },
-        media: { mimeType: file.mimetype, body: createReadStream(file.path) },
-        fields: 'id',
+      const response = await fetch(DRIVE_UPLOAD, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${await accessToken(node, config)}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Type': mime,
+          'X-Upload-Content-Length': String(size),
+        },
+        body: JSON.stringify({ name, parents: [node.folder_id] }),
       });
-      if (node.quota_usage != null) {
-        db.prepare('UPDATE drives SET quota_usage = quota_usage + ? WHERE id = ?').run(file.size, node.id);
+      const sessionUri = response.headers.get('location');
+      if (!response.ok || !sessionUri) throw await googleError(response, 'Google Drive refused to start the upload');
+      return { node: node.id, sessionUri };
+    },
+    // Returns { done, received, key }. Drive may persist fewer bytes than sent; `received` tells the client where to resume.
+    async sendChunk(upload, chunk, offset) {
+      const end = offset + chunk.length;
+      if (upload.node === 'local') {
+        await appendFile(localPath(upload.id), chunk);
+        return { done: end === upload.size, received: end, key: upload.id };
       }
-      return { node: node.id, key: result.data.id };
+      const response = await fetch(upload.session_uri, {
+        method: 'PUT',
+        redirect: 'manual',
+        headers: { 'Content-Range': `bytes ${offset}-${end - 1}/${upload.size}` },
+        body: chunk,
+      });
+      if (response.status === 308) {
+        const range = /bytes=0-(\d+)/.exec(response.headers.get('range') || '');
+        return { done: false, received: range ? Number(range[1]) + 1 : 0 };
+      }
+      if (response.status === 404 || response.status === 410) throw fail(410, 'The upload session expired. Please upload the file again.');
+      if (!response.ok) throw await googleError(response, 'Google Drive rejected part of the upload');
+      const { id } = await response.json();
+      await db.run('UPDATE drives SET quota_usage = quota_usage + ? WHERE id = ? AND quota_usage IS NOT NULL', upload.size, upload.node);
+      return { done: true, received: upload.size, key: id };
+    },
+    async cancelUpload(upload) {
+      if (upload.node === 'local') {
+        if (existsSync(localPath(upload.id))) await unlink(localPath(upload.id));
+      } else if (upload.session_uri) {
+        await fetch(upload.session_uri, { method: 'DELETE' }).catch(() => {});
+      }
     },
     async remove(stored) {
-      if (stored.node === 'local') return unlink(path.join(filesDir, path.basename(stored.key)));
-      const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(stored.node);
+      if (stored.node === 'local') return unlink(localPath(stored.key));
+      const node = await db.get('SELECT * FROM drives WHERE id = ?', stored.node);
       if (!node) throw fail(503, 'The storage connection for this file is unavailable.');
       await driveClient(node, config).files.delete({ fileId: stored.key, supportsAllDrives: true });
     },
     async read(item, range) {
-      if (item.storage_node === 'local') return { local: path.join(filesDir, path.basename(item.storage_key)) };
-      const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(item.storage_node);
+      if (item.storage_node === 'local') return { local: localPath(item.storage_key) };
+      const node = await db.get('SELECT * FROM drives WHERE id = ?', item.storage_node);
       if (!node) throw fail(503, 'The storage connection for this file is unavailable.');
-      const response = await driveClient(node, config).files.get({
-        fileId: item.storage_key, alt: 'media', supportsAllDrives: true,
-      }, { responseType: 'stream', headers: range ? { Range: range } : {} });
-      return { stream: response.data, headers: response.headers, status: response.status };
+      const headers = { Authorization: `Bearer ${await accessToken(node, config)}` };
+      const bounded = boundedRange(range, item.size);
+      if (bounded) headers.Range = bounded;
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(item.storage_key)}?alt=media&supportsAllDrives=true`, { headers });
+      if (response.status === 416) throw fail(416, 'Requested range is not available.');
+      if (!response.ok) throw await googleError(response, 'The file could not be read from Google Drive');
+      return { stream: Readable.fromWeb(response.body), headers: response.headers, status: response.status };
     },
   };
 }

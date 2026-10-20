@@ -4,3 +4,4 @@ dist/
 data/
 server/service-account.json
 *.log
+.vercel

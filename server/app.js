@@ -1,14 +1,12 @@
 import express from 'express';
-import multer from 'multer';
 import { rateLimit } from 'express-rate-limit';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { mkdirSync, existsSync } from 'node:fs';
-import { open, unlink } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { google } from 'googleapis';
 import { openDatabase, audit, hashPassword, verifyPassword } from './db.js';
-import { createStorage, driveClient, encryptToken, isConnected, oauthClient, refreshQuota } from './storage.js';
+import { CHUNK_SIZE, createStorage, driveClient, encryptToken, isConnected, oauthClient, refreshQuota } from './storage.js';
 
 const TYPES = ['image', 'video', 'audio', 'doc', 'link'];
 const FILE_TYPES = TYPES.filter(type => type !== 'link');
@@ -18,9 +16,10 @@ const MIME_TYPES = {
   'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/x-wav': 'audio', 'audio/ogg': 'audio',
   'application/pdf': 'doc', 'text/plain': 'doc',
 };
+const UPLOAD_TTL_MS = 24 * 3600_000;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => Object.assign(new Error(message), { status, expose: true });
-const asyncRoute = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const h = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const text = (value, label, max = 160, min = 1) => {
   if (typeof value !== 'string' || value.trim().length < min || value.trim().length > max) {
     throw fail(400, `${label} must be ${min}-${max} characters.`);
@@ -39,16 +38,25 @@ const publicUser = row => ({
 });
 
 function configuration(overrides) {
-  const production = process.env.NODE_ENV === 'production';
+  const serverless = Boolean(process.env.VERCEL);
+  // On Vercel, NODE_ENV=production would skip installing the build tools, so the platform itself implies production.
+  const production = process.env.NODE_ENV === 'production' || serverless;
+  const vercelOrigin = process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : '';
   const config = {
     production,
-    trustProxy: Number(process.env.TRUST_PROXY ?? (production ? 1 : 0)),
-    origin: process.env.APP_ORIGIN || 'http://localhost:5173',
+    serverless,
+    // Serverless hosts have no permanent disk: files must go to Google Drive and the database to Turso.
+    localStorage: !serverless,
+    serveStatic: production && !serverless,
+    trustProxy: Number(process.env.TRUST_PROXY ?? (production || serverless ? 1 : 0)),
+    origin: process.env.APP_ORIGIN || vercelOrigin || 'http://localhost:5173',
     dataDir: path.resolve(process.env.DATA_DIR || 'data'),
+    databaseUrl: process.env.TURSO_DATABASE_URL || '',
+    databaseAuthToken: process.env.TURSO_AUTH_TOKEN || '',
     googleClientId: process.env.GOOGLE_CLIENT_ID || '',
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     siteAdmins: (process.env.SITE_ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
-    serviceAccount: process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
+    serviceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
     encryptionKey: process.env.STORAGE_ENCRYPTION_KEY || '',
     maxUploadMB: Number(process.env.MAX_UPLOAD_MB || 100),
     ...overrides,
@@ -58,8 +66,9 @@ function configuration(overrides) {
   if (config.production && (!config.googleClientId || !config.googleClientSecret || !config.siteAdmins.length)) {
     throw new Error('Production requires Google OAuth credentials and SITE_ADMIN_EMAILS.');
   }
-  if (!Number.isInteger(config.maxUploadMB) || config.maxUploadMB < 1 || config.maxUploadMB > 1024) {
-    throw new Error('MAX_UPLOAD_MB must be an integer between 1 and 1024.');
+  if (config.serverless && !config.databaseUrl) throw new Error('Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN: serverless hosts cannot keep a local database.');
+  if (!Number.isInteger(config.maxUploadMB) || config.maxUploadMB < 1 || config.maxUploadMB > 5120) {
+    throw new Error('MAX_UPLOAD_MB must be an integer between 1 and 5120.');
   }
   if (!Number.isInteger(config.trustProxy) || config.trustProxy < 0 || config.trustProxy > 10) {
     throw new Error('TRUST_PROXY must be the number of proxies in front of the server (0-10).');
@@ -67,10 +76,8 @@ function configuration(overrides) {
   return config;
 }
 
-async function verifyFile(file) {
-  const handle = await open(file.path, 'r');
-  const buffer = Buffer.alloc(Math.min(file.size, 512));
-  try { await handle.read(buffer, 0, buffer.length, 0); } finally { await handle.close(); }
+function verifySignature(chunk, mime, size) {
+  const buffer = chunk.subarray(0, 512);
   const starts = hex => buffer.subarray(0, hex.length / 2).toString('hex') === hex;
   const ascii = buffer.toString('latin1');
   const matches = {
@@ -84,20 +91,20 @@ async function verifyFile(file) {
     'audio/wav': ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WAVE',
     'audio/x-wav': ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WAVE',
     'audio/ogg': ascii.startsWith('OggS'),
-    'text/plain': file.size > 0 && !buffer.includes(0) && !starts('4d5a'),
+    'text/plain': size > 0 && !buffer.includes(0) && !starts('4d5a'),
   };
-  if (!matches[file.mimetype]) throw fail(400, 'The file contents do not match the selected file format.');
+  if (!matches[mime]) throw fail(400, 'The file contents do not match the selected file format.');
 }
 
 export function createApp(overrides = {}) {
   const config = configuration(overrides);
   const app = express();
-  const db = openDatabase(config.dataDir);
+  const db = openDatabase({ url: config.databaseUrl, authToken: config.databaseAuthToken, directory: config.dataDir });
   const storage = createStorage(config, db);
-  const tempDir = path.join(config.dataDir, 'tmp');
-  mkdirSync(tempDir, { recursive: true });
   app.locals.db = db;
   app.locals.config = config;
+  app.locals.ready = db.ready;
+  db.ready.catch(error => console.error('Database initialisation failed:', error.message));
   app.disable('x-powered-by');
   // Hosting platforms terminate HTTPS at a proxy; trust it so client IPs and rate limits are correct.
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
@@ -112,7 +119,10 @@ export function createApp(overrides = {}) {
     if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
     next();
   });
+  app.use('/api', h(async (req, res, next) => { await db.ready; next(); }));
   app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false,
+    // Upload chunks are bounded by the upload size limit, so they don't count towards the request rate.
+    skip: req => req.method === 'PUT' && req.path.startsWith('/uploads/'),
     message: { error: 'Too many requests. Please try again in a minute.' } }));
   app.use(express.json({ limit: '32kb' }));
   app.use('/api', (req, res, next) => {
@@ -127,18 +137,18 @@ export function createApp(overrides = {}) {
       .find(part => part.startsWith(`${name}=`))?.slice(name.length + 1);
   }
   const cookieOptions = { httpOnly: true, sameSite: 'lax', secure: config.production, path: '/' };
-  function session(res, userId) {
+  async function session(res, userId) {
     const token = randomBytes(32).toString('hex');
-    db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
-    db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(hash(token), userId, Date.now() + 7 * 86400000);
+    await db.run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
+    await db.run('INSERT INTO sessions VALUES (?, ?, ?)', hash(token), userId, Date.now() + 7 * 86400000);
     res.cookie('voice_session', token, { ...cookieOptions, maxAge: 7 * 86400000 });
   }
-  app.use('/api', (req, res, next) => {
+  app.use('/api', h(async (req, res, next) => {
     const token = cookie(req, 'voice_session');
-    if (token) req.user = db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = ? AND s.expires_at > ? AND u.suspended = 0`).get(hash(token), Date.now());
+    if (token) req.user = await db.get(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND s.expires_at > ? AND u.suspended = 0`, hash(token), Date.now());
     next();
-  });
+  }));
   const authenticated = (req, res, next) => req.user ? next() : next(fail(401, 'Please sign in to continue.'));
   const roles = (...allowed) => (req, res, next) =>
     allowed.includes(req.user?.role) ? next() : next(fail(403, 'You do not have permission to perform this action.'));
@@ -154,46 +164,46 @@ export function createApp(overrides = {}) {
   }));
   app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.get('/api/auth/me', authenticated, (req, res) => res.json({ user: publicUser(req.user) }));
-  app.post('/api/auth/logout', authenticated, (req, res) => {
-    db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hash(cookie(req, 'voice_session')));
+  app.post('/api/auth/logout', authenticated, h(async (req, res) => {
+    await db.run('DELETE FROM sessions WHERE token_hash = ?', hash(cookie(req, 'voice_session')));
     res.clearCookie('voice_session', cookieOptions);
     res.json({ ok: true });
-  });
+  }));
   const password = value => {
     if (typeof value !== 'string' || value.length < 8 || value.length > 128) throw fail(400, 'Password must be 8-128 characters.');
     return value;
   };
-  app.post('/api/auth/signup', authLimiter, (req, res) => {
+  app.post('/api/auth/signup', authLimiter, h(async (req, res) => {
     const name = text(req.body.name, 'Name', 100, 2);
     const email = emailAddress(req.body.email);
     const secret = password(req.body.password);
     if (config.siteAdmins.includes(email)) throw fail(403, 'This address is reserved for administrators. Continue with Google instead.');
-    if (db.prepare('SELECT id FROM users WHERE email = ?').get(email)) throw fail(409, 'An account with this email already exists. Sign in instead.');
+    if (await db.get('SELECT id FROM users WHERE email = ?', email)) throw fail(409, 'An account with this email already exists. Sign in instead.');
     const id = randomUUID();
-    db.prepare('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, email, name, 'user', new Date().toISOString(), hashPassword(secret));
-    audit(db, id, 'Signed up', email);
-    session(res, id);
+    await db.run('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)',
+      id, email, name, 'user', new Date().toISOString(), hashPassword(secret));
+    await audit(db, id, 'Signed up', email);
+    await session(res, id);
     res.status(201).json({ ok: true });
-  });
-  app.post('/api/auth/login', authLimiter, (req, res) => {
+  }));
+  app.post('/api/auth/login', authLimiter, h(async (req, res) => {
     const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     const secret = typeof req.body.password === 'string' ? req.body.password : '';
-    const user = email ? db.prepare('SELECT * FROM users WHERE email = ?').get(email) : null;
+    const user = email ? await db.get('SELECT * FROM users WHERE email = ?', email) : null;
     const valid = verifyPassword(secret, user?.password_hash);
     if (!user || !valid) throw fail(401, 'Incorrect email or password. If you joined with Google, use Continue with Google.');
     if (user.suspended) throw fail(403, 'This account has been suspended. Contact an administrator.');
-    session(res, user.id);
+    await session(res, user.id);
     res.json({ ok: true });
-  });
+  }));
 
-  function beginOAuth(req, res, purpose, nodeId = null) {
+  async function beginOAuth(req, res, purpose, nodeId = null) {
     if (!config.googleClientId || !config.googleClientSecret) throw fail(503, 'Google sign-in has not been configured.');
     const state = randomBytes(32).toString('hex');
     const verifier = randomBytes(48).toString('base64url');
-    db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(Date.now());
-    db.prepare('INSERT INTO oauth_states VALUES (?, ?, ?, ?, ?, ?)')
-      .run(hash(state), purpose, req.user?.id || null, nodeId, verifier, Date.now() + 600000);
+    await db.run('DELETE FROM oauth_states WHERE expires_at < ?', Date.now());
+    await db.run('INSERT INTO oauth_states VALUES (?, ?, ?, ?, ?, ?)',
+      hash(state), purpose, req.user?.id || null, nodeId, verifier, Date.now() + 600000);
     res.cookie('voice_oauth', state, { ...cookieOptions, maxAge: 600000 });
     res.redirect(oauthClient(config).generateAuthUrl({
       state, code_challenge: createHash('sha256').update(verifier).digest('base64url'),
@@ -205,15 +215,15 @@ export function createApp(overrides = {}) {
       prompt: purpose === 'drive' ? 'consent' : 'select_account',
     }));
   }
-  app.get('/api/auth/google', authLimiter, (req, res) => beginOAuth(req, res, 'login'));
-  app.get('/api/auth/google/callback', authLimiter, asyncRoute(async (req, res) => {
+  app.get('/api/auth/google', authLimiter, h((req, res) => beginOAuth(req, res, 'login')));
+  app.get('/api/auth/google/callback', authLimiter, h(async (req, res) => {
     try {
       const state = typeof req.query.state === 'string' ? req.query.state : '';
-      const record = db.prepare('SELECT * FROM oauth_states WHERE hash = ?').get(hash(state));
+      const record = await db.get('SELECT * FROM oauth_states WHERE hash = ?', hash(state));
       if (!record || record.expires_at < Date.now() || cookie(req, 'voice_oauth') !== state) {
         throw fail(400, 'The sign-in request expired. Please try again.');
       }
-      db.prepare('DELETE FROM oauth_states WHERE hash = ?').run(hash(state));
+      await db.run('DELETE FROM oauth_states WHERE hash = ?', hash(state));
       res.clearCookie('voice_oauth', cookieOptions);
       if (req.query.error) throw fail(400, 'Google authorization was cancelled or denied.');
       if (typeof req.query.code !== 'string') throw fail(400, 'Google did not return an authorization code.');
@@ -228,36 +238,36 @@ export function createApp(overrides = {}) {
         if (req.user?.id !== record.user_id || req.user.role !== 'site_admin') throw fail(403, 'Site administrator access is required.');
         if (!tokens.refresh_token) throw fail(400, 'No offline access token was returned. Reconnect and grant consent.');
         client.setCredentials(tokens);
-        const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(record.node_id);
+        const node = await db.get('SELECT * FROM drives WHERE id = ?', record.node_id);
         if (!node) throw fail(404, 'Storage destination not found.');
         const { data: folder } = await google.drive({ version: 'v3', auth: client })
           .files.get({ fileId: node.folder_id, fields: 'id,mimeType,capabilities(canAddChildren)', supportsAllDrives: true });
         if (folder.mimeType !== 'application/vnd.google-apps.folder' || !folder.capabilities?.canAddChildren) {
           throw fail(400, 'The account cannot upload to this folder. Check its folder ID and access.');
         }
-        db.prepare('UPDATE drives SET refresh_token = ?, account_email = ? WHERE id = ?')
-          .run(encryptToken(tokens.refresh_token, config.encryptionKey), email, record.node_id);
-        audit(db, req.user.id, 'Connected Google Drive', node.name);
+        await db.run('UPDATE drives SET refresh_token = ?, account_email = ? WHERE id = ?',
+          encryptToken(tokens.refresh_token, config.encryptionKey), email, record.node_id);
+        await audit(db, req.user.id, 'Connected Google Drive', node.name);
         return res.redirect(`${config.origin}/?connected=1`);
       }
-      let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+      let user = await db.get('SELECT * FROM users WHERE email = ?', email);
       const isSiteAdmin = config.siteAdmins.includes(email);
       if (!user) {
         const id = randomUUID();
-        db.prepare('INSERT INTO users (id, email, name, role, created_at, google_linked) VALUES (?, ?, ?, ?, ?, 1)')
-          .run(id, email, identity.name || email.split('@')[0], isSiteAdmin ? 'site_admin' : 'user', new Date().toISOString());
-        audit(db, id, 'Signed up with Google', email);
-        user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+        await db.run('INSERT INTO users (id, email, name, role, created_at, google_linked) VALUES (?, ?, ?, ?, ?, 1)',
+          id, email, identity.name || email.split('@')[0], isSiteAdmin ? 'site_admin' : 'user', new Date().toISOString());
+        await audit(db, id, 'Signed up with Google', email);
+        user = await db.get('SELECT * FROM users WHERE id = ?', id);
       } else {
         if (user.suspended) throw fail(403, 'This account has been suspended. Contact an administrator.');
         if (!user.google_linked) {
           // Someone may have registered this address with a password before its owner signed in with Google.
-          db.prepare('UPDATE users SET google_linked = 1, password_hash = NULL WHERE id = ?').run(user.id);
-          db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+          await db.run('UPDATE users SET google_linked = 1, password_hash = NULL WHERE id = ?', user.id);
+          await db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
         }
-        if (isSiteAdmin && user.role !== 'site_admin') db.prepare("UPDATE users SET role = 'site_admin' WHERE id = ?").run(user.id);
+        if (isSiteAdmin && user.role !== 'site_admin') await db.run("UPDATE users SET role = 'site_admin' WHERE id = ?", user.id);
       }
-      session(res, user.id);
+      await session(res, user.id);
       res.redirect(config.origin);
     } catch (error) {
       console.error('Google authorization failed:', error);
@@ -274,12 +284,13 @@ export function createApp(overrides = {}) {
   function visible(item, user) {
     return item.status === 'approved' || isReviewer(user) || item.uploader_id === user.id;
   }
-  function getContent(req) {
-    const item = db.prepare(`${contentQuery} WHERE c.id = ?`).get(req.user.id, req.params.id);
+  async function getContent(req) {
+    const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, req.params.id);
     if (!item || !visible(item, req.user)) throw fail(404, 'Content not found.');
     return { item };
   }
-  app.get('/api/content', (req, res) => {
+  const count = async (sql, ...args) => (await db.get(sql, ...args)).n;
+  app.get('/api/content', h(async (req, res) => {
     const scope = req.query.scope || 'library';
     if (!['library', 'mine', 'review', 'saved'].includes(scope)) throw fail(400, 'Unknown content view.');
     if (scope === 'review' && !isReviewer(req.user)) throw fail(403, 'Only administrators can review submissions.');
@@ -289,19 +300,21 @@ export function createApp(overrides = {}) {
     };
     const params = [req.user.id];
     if (scope === 'mine' || scope === 'saved') params.push(req.user.id);
-    const rows = db.prepare(`${contentQuery} WHERE ${clauses[scope]} ORDER BY c.created_at DESC`).all(...params);
+    const rows = await db.all(`${contentQuery} WHERE ${clauses[scope]} ORDER BY c.created_at DESC`, ...params);
     res.json({ items: rows.map(({ storage_key, ...item }) => item) });
-  });
-  app.get('/api/overview', (req, res) => {
-    const approved = db.prepare("SELECT count(*) AS count FROM content WHERE status = 'approved'").get().count;
-    const contributions = db.prepare('SELECT count(*) AS count FROM content WHERE uploader_id = ?').get(req.user.id).count;
-    const pending = db.prepare(`SELECT count(*) AS count FROM content WHERE status = 'pending'${isReviewer(req.user) ? '' : ' AND uploader_id = ?'}`)
-      .get(...(isReviewer(req.user) ? [] : [req.user.id])).count;
-    const members = db.prepare('SELECT count(*) AS count FROM users').get().count;
+  }));
+  app.get('/api/overview', h(async (req, res) => {
+    const approved = await count("SELECT count(*) AS n FROM content WHERE status = 'approved'");
+    const contributions = await count('SELECT count(*) AS n FROM content WHERE uploader_id = ?', req.user.id);
+    const pending = isReviewer(req.user)
+      ? await count("SELECT count(*) AS n FROM content WHERE status = 'pending'")
+      : await count("SELECT count(*) AS n FROM content WHERE status = 'pending' AND uploader_id = ?", req.user.id);
+    const members = await count('SELECT count(*) AS n FROM users');
     res.json({ approved, contributions, pending, members });
-  });
-  app.get('/api/storage', (req, res) => {
-    const rows = db.prepare('SELECT * FROM drives ORDER BY created_at').all();
+  }));
+  app.get('/api/storage', h(async (req, res) => {
+    const rows = await db.all(`SELECT d.*, (SELECT count(*) FROM content c WHERE c.storage_node = d.id) AS file_count
+      FROM drives d ORDER BY d.created_at`);
     const nodes = rows.map(node => ({
       id: node.id, name: node.name, kind: node.kind,
       connected: isConnected(node, config), enabled: Boolean(node.enabled),
@@ -309,11 +322,12 @@ export function createApp(overrides = {}) {
         folderId: node.folder_id, accountEmail: node.account_email,
         quotaUsage: node.quota_usage, quotaLimit: node.quota_limit, quotaCheckedAt: node.quota_checked_at,
       } : {}),
-      fileCount: db.prepare('SELECT count(*) AS n FROM content WHERE storage_node = ?').get(node.id).n,
+      fileCount: node.file_count,
     }));
     res.json({
-      nodes, local: { id: 'local', name: 'Local workspace', kind: 'local', connected: true,
-        fileCount: db.prepare("SELECT count(*) AS n FROM content WHERE storage_node = 'local'").get().n },
+      nodes,
+      local: config.localStorage ? { id: 'local', name: 'Local workspace', kind: 'local', connected: true,
+        fileCount: await count("SELECT count(*) AS n FROM content WHERE storage_node = 'local'") } : null,
       oauthReady: Boolean(config.googleClientId && config.googleClientSecret && /^[a-fA-F0-9]{64}$/.test(config.encryptionKey)),
       serviceReady: Boolean(config.serviceAccount),
       setup: {
@@ -323,79 +337,110 @@ export function createApp(overrides = {}) {
         redirectUri: `${config.origin}/api/auth/google/callback`,
       },
     });
-  });
-  const upload = multer({
-    dest: tempDir,
-    limits: { fileSize: config.maxUploadMB * 1024 * 1024, files: 1, fields: 8, fieldSize: 5000 },
-    fileFilter: (req, file, cb) => MIME_TYPES[file.mimetype] ? cb(null, true) : cb(fail(400, 'Unsupported file type. Use JPG, PNG, WebP, MP4, WebM, MP3, WAV, OGG, PDF, or TXT.')),
-  });
-  app.post('/api/content', upload.single('file'), asyncRoute(async (req, res) => {
-    let stored;
-    let committed = false;
+  }));
+
+  // Links are submitted directly; files go through the chunked /api/uploads flow below.
+  app.post('/api/content', h(async (req, res) => {
+    const title = text(req.body.title, 'Title');
+    const description = text(req.body.description || '', 'Description', 2000, 0);
+    const url = text(req.body.url, 'URL', 2048);
+    let parsed;
+    try { parsed = new URL(url); } catch { throw fail(400, 'Enter a valid HTTPS link.'); }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw fail(400, 'Links must use HTTPS and cannot contain credentials.');
+    const id = randomUUID();
+    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at)
+      VALUES (?,?,?,'link',?,'pending',?,?)`, id, title, description, url, req.user.id, new Date().toISOString());
+    await audit(db, req.user.id, 'Submitted content', title);
+    res.status(201).json({ id, status: 'pending', message: 'Submitted for admin approval.' });
+  }));
+
+  // Chunked uploads keep every request under serverless body limits and stream straight into Google Drive.
+  async function discard(upload) {
+    try { await storage.cancelUpload(upload); } catch (error) { console.error('Upload cleanup failed:', upload.id, error.message); }
+    await db.run('DELETE FROM uploads WHERE id = ?', upload.id);
+  }
+  app.post('/api/uploads', h(async (req, res) => {
+    for (const stale of await db.all('SELECT * FROM uploads WHERE created_at < ?', Date.now() - UPLOAD_TTL_MS)) await discard(stale);
+    const title = text(req.body.title, 'Title');
+    const description = text(req.body.description || '', 'Description', 2000, 0);
+    const name = text(req.body.name, 'File name', 255);
+    const size = Number(req.body.size);
+    const type = MIME_TYPES[req.body.mime];
+    if (!type) throw fail(400, 'Unsupported file type. Use JPG, PNG, WebP, MP4, WebM, MP3, WAV, OGG, PDF, or TXT.');
+    if (!Number.isInteger(size) || size < 1) throw fail(400, 'Empty files cannot be uploaded.');
+    if (size > config.maxUploadMB * 1024 * 1024) throw fail(400, `File exceeds the ${config.maxUploadMB} MB upload limit.`);
+    const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
+    const id = randomUUID();
+    const started = await storage.startUpload({ id, target, name, mime: req.body.mime, size });
+    await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, req.body.mime, name, size,
+    started.node, started.sessionUri, Date.now());
+    res.status(201).json({ id, chunkSize: CHUNK_SIZE });
+  }));
+  const ownUpload = async req => {
+    const upload = await db.get('SELECT * FROM uploads WHERE id = ? AND user_id = ?', req.params.id, req.user.id);
+    if (!upload) throw fail(404, 'Upload not found. It may have expired; please start again.');
+    return upload;
+  };
+  app.put('/api/uploads/:id', express.raw({ type: 'application/octet-stream', limit: CHUNK_SIZE + 1024 }), h(async (req, res) => {
+    const upload = await ownUpload(req);
+    const offset = Number(req.query.offset);
+    const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (offset !== upload.received) return res.status(409).json({ error: 'Upload is out of sync; resuming.', received: upload.received });
+    const end = offset + chunk.length;
+    if (!chunk.length || end > upload.size) throw fail(400, 'Invalid upload chunk.');
+    if (end < upload.size && chunk.length % (256 * 1024) !== 0) throw fail(400, 'Upload chunks must be multiples of 256 KB.');
+    if (offset === 0) {
+      try { verifySignature(chunk, upload.mime, upload.size); } catch (error) { await discard(upload); throw error; }
+    }
+    const result = await storage.sendChunk(upload, chunk, offset);
+    if (!result.done) {
+      await db.run('UPDATE uploads SET received = ? WHERE id = ? AND received = ?', result.received, upload.id, offset);
+      return res.json({ done: false, received: result.received });
+    }
+    const id = randomUUID();
     try {
-      const title = text(req.body.title, 'Title');
-      const description = text(req.body.description || '', 'Description', 2000, 0);
-      let type;
-      let url = null;
-      if (req.file && req.body.url) throw fail(400, 'Submit either a file or a link, not both.');
-      if (req.file) {
-        if (!req.file.size) throw fail(400, 'Empty files cannot be uploaded.');
-        await verifyFile(req.file);
-        type = MIME_TYPES[req.file.mimetype];
-        const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
-        if (!['auto', 'local'].includes(target)) {
-          const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(target);
-          if (!node) throw fail(400, 'Storage destination not found.');
-          if (!isConnected(node, config)) throw fail(400, 'This storage destination is not connected yet.');
-        }
-        stored = await storage.save(req.file, type, target);
-      } else {
-        type = 'link';
-        url = text(req.body.url, 'URL', 2048);
-        let parsed;
-        try { parsed = new URL(url); } catch { throw fail(400, 'Enter a valid HTTPS link.'); }
-        if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw fail(400, 'Links must use HTTPS and cannot contain credentials.');
-      }
-      const id = randomUUID();
-      db.prepare(`INSERT INTO content
-        (id,title,description,type,mime,original_name,size,storage_node,storage_key,url,status,uploader_id,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?,?)`)
-        .run(id, title, description, type, req.file?.mimetype || null, req.file?.originalname || null,
-          req.file?.size || 0, stored?.node || null, stored?.key || null, url, req.user.id, new Date().toISOString());
-      committed = true;
-      audit(db, req.user.id, 'Submitted content', title);
-      res.status(201).json({ id, status: 'pending', message: 'Submitted for admin approval.' });
+      await db.run(`INSERT INTO content
+        (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
+      upload.original_name, upload.size, upload.node, result.key, req.user.id, new Date().toISOString());
     } catch (error) {
-      if (stored && !committed) {
-        try { await storage.remove(stored); } catch (cleanupError) { console.error('Storage rollback failed; manual cleanup required:', stored, cleanupError); }
+      try { await storage.remove({ node: upload.node, key: result.key }); } catch (cleanupError) {
+        console.error('Storage rollback failed; manual cleanup required:', upload.node, result.key, cleanupError);
       }
       throw error;
-    } finally {
-      if (req.file && existsSync(req.file.path)) await unlink(req.file.path);
     }
+    await db.run('DELETE FROM uploads WHERE id = ?', upload.id);
+    await audit(db, req.user.id, 'Submitted content', upload.title);
+    res.status(201).json({ done: true, id, status: 'pending', message: 'Submitted for admin approval.' });
   }));
-  app.post('/api/content/:id/review', reviewers, (req, res) => {
-    const { item } = getContent(req);
+  app.delete('/api/uploads/:id', h(async (req, res) => {
+    await discard(await ownUpload(req));
+    res.json({ ok: true });
+  }));
+
+  app.post('/api/content/:id/review', reviewers, h(async (req, res) => {
+    const { item } = await getContent(req);
     if (req.user.role === 'org_admin' && item.uploader_id === req.user.id) throw fail(403, 'Your own submissions must be reviewed by another administrator.');
     if (!['approved', 'rejected'].includes(req.body.decision)) throw fail(400, 'Choose approve or reject.');
     if (item.status !== 'pending') throw fail(409, 'This submission has already been reviewed.');
     const note = text(req.body.note || '', 'Review note', 1000, req.body.decision === 'rejected' ? 5 : 0);
-    const result = db.prepare(`UPDATE content SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = ?
-      WHERE id = ? AND status = 'pending'`).run(req.body.decision, req.user.id, note, new Date().toISOString(), item.id);
+    const result = await db.run(`UPDATE content SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = ?
+      WHERE id = ? AND status = 'pending'`, req.body.decision, req.user.id, note, new Date().toISOString(), item.id);
     if (!result.changes) throw fail(409, 'Another administrator has already reviewed this submission.');
-    audit(db, req.user.id, req.body.decision === 'approved' ? 'Approved content' : 'Rejected content', item.title);
+    await audit(db, req.user.id, req.body.decision === 'approved' ? 'Approved content' : 'Rejected content', item.title);
     res.json({ ok: true });
-  });
-  app.post('/api/content/:id/bookmark', (req, res) => {
-    const { item } = getContent(req);
+  }));
+  app.post('/api/content/:id/bookmark', h(async (req, res) => {
+    const { item } = await getContent(req);
     if (item.status !== 'approved') throw fail(400, 'Only approved content can be saved.');
-    const current = db.prepare('SELECT 1 FROM bookmarks WHERE user_id = ? AND content_id = ?').get(req.user.id, item.id);
-    if (current) db.prepare('DELETE FROM bookmarks WHERE user_id = ? AND content_id = ?').run(req.user.id, item.id);
-    else db.prepare('INSERT INTO bookmarks VALUES (?, ?)').run(req.user.id, item.id);
+    const current = await db.get('SELECT 1 AS found FROM bookmarks WHERE user_id = ? AND content_id = ?', req.user.id, item.id);
+    if (current) await db.run('DELETE FROM bookmarks WHERE user_id = ? AND content_id = ?', req.user.id, item.id);
+    else await db.run('INSERT INTO bookmarks VALUES (?, ?)', req.user.id, item.id);
     res.json({ bookmarked: !current });
-  });
-  app.delete('/api/content/:id', asyncRoute(async (req, res) => {
-    const { item } = getContent(req);
+  }));
+  app.delete('/api/content/:id', h(async (req, res) => {
+    const { item } = await getContent(req);
     const owner = item.uploader_id === req.user.id && item.status !== 'approved';
     if (req.user.role !== 'site_admin' && !owner) throw fail(403, 'Only site admins can remove published content.');
     if (item.storage_key) {
@@ -403,13 +448,13 @@ export function createApp(overrides = {}) {
         console.error('Stored file could not be removed; manual cleanup required:', item.storage_node, item.storage_key, error.message);
       }
     }
-    db.prepare('DELETE FROM bookmarks WHERE content_id = ?').run(item.id);
-    db.prepare('DELETE FROM content WHERE id = ?').run(item.id);
-    audit(db, req.user.id, 'Deleted content', item.title);
+    await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
+    await db.run('DELETE FROM content WHERE id = ?', item.id);
+    await audit(db, req.user.id, 'Deleted content', item.title);
     res.json({ ok: true });
   }));
-  app.get('/api/content/:id/file', asyncRoute(async (req, res) => {
-    const { item } = getContent(req);
+  app.get('/api/content/:id/file', h(async (req, res) => {
+    const { item } = await getContent(req);
     if (!item.storage_key) throw fail(404, 'This contribution is a link, not a file.');
     const file = await storage.read(item, req.get('range'));
     const name = encodeURIComponent(item.original_name || item.title).replace(/'/g, '%27');
@@ -425,59 +470,63 @@ export function createApp(overrides = {}) {
     res.status(file.status);
     await pipeline(file.stream, res);
   }));
-  app.get('/api/users', siteAdmin, (req, res) => {
-    const users = db.prepare(`SELECT u.*, (SELECT COUNT(*) FROM content c WHERE c.uploader_id = u.id) AS uploads
-      FROM users u ORDER BY CASE u.role WHEN 'site_admin' THEN 0 WHEN 'org_admin' THEN 1 ELSE 2 END, u.name`).all();
+  app.get('/api/users', siteAdmin, h(async (req, res) => {
+    const users = await db.all(`SELECT u.*, (SELECT COUNT(*) FROM content c WHERE c.uploader_id = u.id) AS uploads
+      FROM users u ORDER BY CASE u.role WHEN 'site_admin' THEN 0 WHEN 'org_admin' THEN 1 ELSE 2 END, u.name`);
     res.json({ users: users.map(row => ({ ...publicUser(row), uploads: row.uploads })) });
-  });
-  const member = id => {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  }));
+  const member = async id => {
+    const user = await db.get('SELECT * FROM users WHERE id = ?', id);
     if (!user) throw fail(404, 'Member not found.');
     return user;
   };
-  app.patch('/api/users/:id', siteAdmin, (req, res) => {
-    const user = member(req.params.id);
+  app.patch('/api/users/:id', siteAdmin, h(async (req, res) => {
+    const user = await member(req.params.id);
     if (user.role === 'site_admin') throw fail(403, 'Site administrator accounts are managed through server configuration.');
     if (!['user', 'org_admin'].includes(req.body.role)) throw fail(400, 'Choose a valid member role.');
-    db.prepare('UPDATE users SET role = ? WHERE id = ?').run(req.body.role, user.id);
-    audit(db, req.user.id, req.body.role === 'org_admin' ? 'Made org admin' : 'Removed org admin', user.email);
+    await db.run('UPDATE users SET role = ? WHERE id = ?', req.body.role, user.id);
+    await audit(db, req.user.id, req.body.role === 'org_admin' ? 'Made org admin' : 'Removed org admin', user.email);
     res.json({ ok: true });
-  });
-  app.post('/api/users/:id/suspend', siteAdmin, (req, res) => {
-    const user = member(req.params.id);
+  }));
+  app.post('/api/users/:id/suspend', siteAdmin, h(async (req, res) => {
+    const user = await member(req.params.id);
     const suspended = Boolean(req.body.suspended);
     if (user.id === req.user.id) throw fail(400, 'You cannot suspend your own account.');
     if (user.role === 'site_admin') throw fail(403, 'Site administrators cannot be suspended.');
-    db.prepare('UPDATE users SET suspended = ? WHERE id = ?').run(suspended ? 1 : 0, user.id);
-    if (suspended) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
-    audit(db, req.user.id, suspended ? 'Suspended member' : 'Reactivated member', user.email);
+    await db.run('UPDATE users SET suspended = ? WHERE id = ?', suspended ? 1 : 0, user.id);
+    if (suspended) await db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
+    await audit(db, req.user.id, suspended ? 'Suspended member' : 'Reactivated member', user.email);
     res.json({ ok: true });
-  });
-  app.get('/api/audit', siteAdmin, (req, res) => res.json({
-    entries: db.prepare(`SELECT a.*, u.name AS actor FROM audit a JOIN users u ON u.id = a.actor_id
-      ORDER BY a.created_at DESC LIMIT 100`).all(),
   }));
-  app.post('/api/storage', siteAdmin, (req, res) => {
+  app.get('/api/audit', siteAdmin, h(async (req, res) => res.json({
+    entries: await db.all(`SELECT a.*, u.name AS actor FROM audit a JOIN users u ON u.id = a.actor_id
+      ORDER BY a.created_at DESC LIMIT 100`),
+  })));
+  const drive = async id => {
+    const node = await db.get('SELECT * FROM drives WHERE id = ?', id);
+    if (!node) throw fail(404, 'Storage destination not found.');
+    return node;
+  };
+  app.post('/api/storage', siteAdmin, h(async (req, res) => {
     const name = text(req.body.name, 'Storage name', 100);
     const folderId = text(req.body.folderId, 'Folder ID', 200);
     if (!/^[A-Za-z0-9_-]+$/.test(folderId)) throw fail(400, 'Enter a Google Drive folder ID, not its full URL.');
     if (!['oauth', 'service'].includes(req.body.kind)) throw fail(400, 'Choose a storage connection type.');
-    if (db.prepare('SELECT 1 FROM drives WHERE folder_id = ?').get(folderId)) throw fail(409, 'This folder is already registered.');
+    if (await db.get('SELECT 1 AS found FROM drives WHERE folder_id = ?', folderId)) throw fail(409, 'This folder is already registered.');
     const id = randomUUID();
-    db.prepare(`INSERT INTO drives (id,name,folder_id,kind,types,created_at) VALUES (?,?,?,?,?,?)`)
-      .run(id, name, folderId, req.body.kind, JSON.stringify(FILE_TYPES), new Date().toISOString());
-    audit(db, req.user.id, 'Added storage destination', name);
+    await db.run('INSERT INTO drives (id,name,folder_id,kind,types,created_at) VALUES (?,?,?,?,?,?)',
+      id, name, folderId, req.body.kind, JSON.stringify(FILE_TYPES), new Date().toISOString());
+    await audit(db, req.user.id, 'Added storage destination', name);
     res.status(201).json({ id });
-  });
-  app.get('/api/storage/:id/connect', siteAdmin, (req, res) => {
-    const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(req.params.id);
+  }));
+  app.get('/api/storage/:id/connect', siteAdmin, h(async (req, res) => {
+    const node = await db.get('SELECT * FROM drives WHERE id = ?', req.params.id);
     if (!node || node.kind !== 'oauth') throw fail(404, 'Personal Drive destination not found.');
-    if (!/^[a-fA-F0-9]{64}$/.test(config.encryptionKey)) throw fail(503, 'Set a 64-character hex STORAGE_ENCRYPTION_KEY in .env and restart the server.');
-    beginOAuth(req, res, 'drive', node.id);
-  });
-  app.post('/api/storage/:id/test', siteAdmin, asyncRoute(async (req, res) => {
-    const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(req.params.id);
-    if (!node) throw fail(404, 'Storage destination not found.');
+    if (!/^[a-fA-F0-9]{64}$/.test(config.encryptionKey)) throw fail(503, 'Set a 64-character hex STORAGE_ENCRYPTION_KEY and restart the server.');
+    await beginOAuth(req, res, 'drive', node.id);
+  }));
+  app.post('/api/storage/:id/test', siteAdmin, h(async (req, res) => {
+    const node = await drive(req.params.id);
     const { data } = await driveClient(node, config).files.get({
       fileId: node.folder_id, supportsAllDrives: true, fields: 'id,name,mimeType,driveId,capabilities(canAddChildren)',
     });
@@ -488,28 +537,26 @@ export function createApp(overrides = {}) {
     const quota = await refreshQuota(db, node, config);
     res.json({ message: `Connection verified: ${data.name}`, quota });
   }));
-  app.patch('/api/storage/:id', siteAdmin, (req, res) => {
-    const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(req.params.id);
-    if (!node) throw fail(404, 'Storage destination not found.');
+  app.patch('/api/storage/:id', siteAdmin, h(async (req, res) => {
+    const node = await drive(req.params.id);
     const name = req.body.name === undefined ? node.name : text(req.body.name, 'Storage name', 100);
     const enabled = req.body.enabled === undefined ? node.enabled : req.body.enabled ? 1 : 0;
-    db.prepare('UPDATE drives SET name = ?, enabled = ? WHERE id = ?').run(name, enabled, node.id);
-    audit(db, req.user.id, 'Updated storage destination', name);
+    await db.run('UPDATE drives SET name = ?, enabled = ? WHERE id = ?', name, enabled, node.id);
+    await audit(db, req.user.id, 'Updated storage destination', name);
     res.json({ ok: true });
-  });
-  app.delete('/api/storage/:id', siteAdmin, (req, res) => {
-    const node = db.prepare('SELECT * FROM drives WHERE id = ?').get(req.params.id);
-    if (!node) throw fail(404, 'Storage destination not found.');
-    if (db.prepare('SELECT 1 FROM content WHERE storage_node = ? LIMIT 1').get(node.id)) {
+  }));
+  app.delete('/api/storage/:id', siteAdmin, h(async (req, res) => {
+    const node = await drive(req.params.id);
+    if (await db.get('SELECT 1 AS found FROM content WHERE storage_node = ? LIMIT 1', node.id)) {
       throw fail(409, 'This Drive still holds files. Pause it instead so new uploads go elsewhere.');
     }
-    db.prepare('DELETE FROM drives WHERE id = ?').run(node.id);
-    audit(db, req.user.id, 'Removed storage destination', node.name);
+    await db.run('DELETE FROM drives WHERE id = ?', node.id);
+    await audit(db, req.user.id, 'Removed storage destination', node.name);
     res.json({ ok: true });
-  });
+  }));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found.' }));
-  if (config.production) {
+  if (config.serveStatic) {
     const dist = path.resolve('dist');
     if (!existsSync(path.join(dist, 'index.html'))) throw new Error('Production build missing. Run npm run build first.');
     app.use(express.static(dist));
@@ -518,10 +565,9 @@ export function createApp(overrides = {}) {
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
     console.error(`${req.method} ${req.path}:`, error.message);
-    const status = error instanceof multer.MulterError ? 400 : error.status >= 400 && error.status < 600 ? error.status : 500;
-    const message = error.code === 'LIMIT_FILE_SIZE' ? `File exceeds the ${config.maxUploadMB} MB upload limit.`
-      : error instanceof multer.MulterError ? `Upload rejected: ${error.message}`
-        : error.expose ? error.message : 'The operation failed. Please check the connection or server configuration and try again.';
+    if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Upload chunk is too large.' });
+    const status = error.status >= 400 && error.status < 600 ? error.status : 500;
+    const message = error.expose ? error.message : 'The operation failed. Please check the connection or server configuration and try again.';
     res.status(error.expose || status === 400 ? status : 500).json({ error: message });
   });
   return app;

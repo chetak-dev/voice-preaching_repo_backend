@@ -16,7 +16,7 @@ A professional content-sharing platform for communities. Members contribute **im
 
 ## Quick start (local)
 
-Requires **Node.js 22.13+** (uses the built-in `node:sqlite`).
+Requires **Node.js 20+**. Locally the database is a SQLite file in `DATA_DIR`; set `TURSO_DATABASE_URL` to use a hosted Turso database instead.
 
 ```bash
 npm install
@@ -56,9 +56,11 @@ Each free Google account offers 15 GB. The platform treats every Drive folder as
 3. Click **Connect** and sign in with the Google account that owns that folder. A refresh token is stored encrypted with `STORAGE_ENCRYPTION_KEY`.
 4. Click **Test** to verify access and read the Drive's quota.
 
-**Routing:** for each upload, the server picks the *active, connected* Drive with the most free space (quota is cached for 5 minutes). When a Drive is nearly full, **Pause** it — existing files stay available, new uploads go elsewhere. If no Drive is connected, the file is stored locally on the server (`DATA_DIR/files`). Site admins can also choose a specific destination when uploading.
+**Routing:** for each upload, the server picks the *active, connected* Drive with the most free space (quota is cached for 5 minutes). When a Drive is nearly full, **Pause** it — existing files stay available, new uploads go elsewhere. If no Drive is connected, the file is stored locally on the server (`DATA_DIR/files`) — except on Vercel, where a connected Drive is required. Site admins can also choose a specific destination when uploading.
 
-**Workspace Shared Drives** are also supported: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key, add the service account as a member of the Shared Drive, and choose *Workspace Shared Drive* when adding storage.
+**Large files:** the browser sends files in 4 MB chunks, which the server streams straight into Google Drive's resumable upload. This keeps every request within serverless limits, so `MAX_UPLOAD_MB` can be raised (up to 5120).
+
+**Workspace Shared Drives** are also supported: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key file (or paste the key JSON into `GOOGLE_SERVICE_ACCOUNT_JSON`), add the service account as a member of the Shared Drive, and choose *Workspace Shared Drive* when adding storage.
 
 Files are always served through the API after permission checks, so Drive folders do not need to be shared publicly.
 
@@ -71,9 +73,36 @@ NODE_ENV=production npm start
 
 Production requires HTTPS `APP_ORIGIN`, Google OAuth credentials and `SITE_ADMIN_EMAILS`. Run behind a reverse proxy (nginx, Caddy) and back up `DATA_DIR` (SQLite database + local files).
 
-### Free hosting: Oracle Cloud Always Free (recommended)
+## Deploy to Vercel (free)
 
-The app needs a persistent disk for its SQLite database, so a small always-on VM is the best free option (Render/Vercel free tiers wipe the disk on restart).
+Vercel hosts the website and runs the API as a serverless function (`api/index.js`, configured in `vercel.json`). Serverless functions have no permanent disk, so the database lives in **Turso** (free hosted SQLite) and files live in your **Google Drives**.
+
+1. **Create the database (Turso, free).** Sign up at [turso.tech](https://turso.tech) → **Create Database** (e.g. `voice`, region closest to your users). Copy its URL (`libsql://voice-<you>.turso.io`) and click **Create Token** (read & write) to get an auth token.
+2. **Google Cloud.** Follow *Google sign-in* above. In your OAuth client add:
+   - Authorized JavaScript origin: `https://<project>.vercel.app`
+   - Authorized redirect URI: `https://<project>.vercel.app/api/auth/google/callback`
+3. **Import the project.** At [vercel.com/new](https://vercel.com/new), sign in with GitHub, import this repository and keep the detected settings (framework **Vite**, output `dist`).
+4. **Environment variables** (Project → Settings → Environment Variables), before the first deploy:
+   | Name | Value |
+   |------|-------|
+   | `TURSO_DATABASE_URL` | the `libsql://…` URL |
+   | `TURSO_AUTH_TOKEN` | the Turso token |
+   | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | from Google Cloud |
+   | `SITE_ADMIN_EMAILS` | your Gmail address(es), comma-separated |
+   | `STORAGE_ENCRYPTION_KEY` | 64 hex chars (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) |
+   | `APP_ORIGIN` | `https://<project>.vercel.app` (or your custom domain) |
+   | `GOOGLE_SERVICE_ACCOUNT_JSON` | *optional*, the full key JSON for Shared Drives |
+   | `MAX_UPLOAD_MB` | *optional*, default 100 |
+
+   Do **not** set `NODE_ENV` — Vercel needs the build tools, and the app already runs in production mode on Vercel.
+5. **Deploy.** Open the site and **Continue with Google** with an address from `SITE_ADMIN_EMAILS`; you become site admin.
+6. **Connect storage.** Storage → **Add Google Drive** → **Connect** → **Test**. File uploads are refused until at least one Drive is connected.
+
+Every `git push` to `main` redeploys automatically. Sign-in only works on the `APP_ORIGIN` URL (preview URLs are rejected by the origin check). To promote a password account to site admin, put the Turso variables in your local `.env` and run `npm run make-admin -- email@example.com`.
+
+**Free-plan notes:** Vercel's Hobby plan is for personal, non-commercial use. Videos and downloads stream through the API function, which counts towards Hobby bandwidth and function-time allowances; media responses are sent in 4 MB ranges.
+
+### Alternative: Oracle Cloud Always Free VM
 
 1. Create an Oracle Cloud account and launch an **Always Free** Ubuntu 24.04 VM (Ampere A1 or E2.1.Micro). In the VM's subnet security list, allow inbound TCP **80** and **443**.
 2. Point a domain at the VM's public IP (any domain, or a free subdomain from e.g. DuckDNS).

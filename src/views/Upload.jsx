@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, FileUp, Link2, ShieldCheck, UploadCloud, X } from 'lucide-react';
-import { api, uploadWithProgress } from '../api.js';
+import { api, uploadFile } from '../api.js';
 import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
 
 const ACCEPT = {
@@ -39,16 +39,13 @@ export default function Upload({ user, config, navigate, onChanged }) {
   async function submit(event) {
     event.preventDefault();
     setError('');
-    const data = new FormData();
-    data.append('title', form.title);
-    data.append('description', form.description);
     try {
       if (mode === 'file') {
         if (!file) { setError('Choose a file to upload.'); return; }
-        if (isAdmin) data.append('targetDriveId', form.target);
-        data.append('file', file);
         setProgress(0);
-        await uploadWithProgress(data, setProgress);
+        await uploadFile(file, {
+          title: form.title, description: form.description, ...(isAdmin ? { targetDriveId: form.target } : {}),
+        }, setProgress);
       } else {
         await api('/content', { method: 'POST', body: { title: form.title, description: form.description, url: form.url } });
       }
@@ -82,7 +79,7 @@ export default function Upload({ user, config, navigate, onChanged }) {
     );
   }
 
-  const destinations = storage ? [storage.local, ...storage.nodes].filter(node => node.connected) : [];
+  const destinations = storage ? [storage.local, ...storage.nodes].filter(node => node?.connected) : [];
 
   return (
     <div className="mx-auto max-w-3xl">

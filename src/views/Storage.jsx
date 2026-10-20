@@ -132,17 +132,19 @@ export default function Storage() {
               </div>
             ))}
 
-            <div className="card flex flex-col p-5">
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600"><Server className="h-5 w-5" /></div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-slate-900">{data.local.name}</h3>
-                  <p className="text-xs text-slate-500">Used when no Google Drive is connected</p>
+            {data.local && (
+              <div className="card flex flex-col p-5">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600"><Server className="h-5 w-5" /></div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-slate-900">{data.local.name}</h3>
+                    <p className="text-xs text-slate-500">Used when no Google Drive is connected</p>
+                  </div>
+                  <Badge tone="bg-slate-100 text-slate-600 ring-slate-500/20">Fallback</Badge>
                 </div>
-                <Badge tone="bg-slate-100 text-slate-600 ring-slate-500/20">Fallback</Badge>
+                <p className="mt-4 text-xs text-slate-500">Files stored on the server's disk: <span className="font-medium text-slate-800">{data.local.fileCount}</span></p>
               </div>
-              <p className="mt-4 text-xs text-slate-500">Files stored on the server's disk: <span className="font-medium text-slate-800">{data.local.fileCount}</span></p>
-            </div>
+            )}
 
             <button type="button" onClick={openAdd}
               className="flex min-h-[200px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 p-5 text-sm font-medium text-slate-500 transition hover:border-brand-400 hover:bg-brand-50/40 hover:text-brand-700">

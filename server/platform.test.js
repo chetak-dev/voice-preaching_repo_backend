@@ -15,12 +15,13 @@ let dataDir;
 
 before(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), 'voice-test-'));
-  app = createApp({ production: false, dataDir, origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: ['owner@example.test'] });
-  const insert = app.locals.db.prepare('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)');
+  app = createApp({ production: false, dataDir, databaseUrl: 'file::memory:', origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: ['owner@example.test'] });
+  await app.locals.ready;
+  const insert = (...values) => app.locals.db.run('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)', ...values);
   const hashed = hashPassword(TEST_PASSWORD);
-  insert.run('test-admin', 'admin@example.test', 'Test Admin', 'site_admin', new Date().toISOString(), hashed);
-  insert.run('test-org-admin', 'orgadmin@example.test', 'Test Org Admin', 'org_admin', new Date().toISOString(), hashed);
-  insert.run('test-user', 'member@example.test', 'Test Member', 'user', new Date().toISOString(), hashed);
+  await insert('test-admin', 'admin@example.test', 'Test Admin', 'site_admin', new Date().toISOString(), hashed);
+  await insert('test-org-admin', 'orgadmin@example.test', 'Test Org Admin', 'org_admin', new Date().toISOString(), hashed);
+  await insert('test-user', 'member@example.test', 'Test Member', 'user', new Date().toISOString(), hashed);
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -42,10 +43,11 @@ async function signIn(role, password = TEST_PASSWORD) {
   const res = await post('/api/auth/login', { email: ACCOUNTS[role] || role, password });
   assert.equal(res.status, 200);
   const cookie = res.headers.get('set-cookie').split(';')[0];
-  return async (url, { method = 'GET', body, form } = {}) => {
+  return async (url, { method = 'GET', body, raw } = {}) => {
     const headers = { Cookie: cookie, Origin: ORIGIN };
     if (body) headers['Content-Type'] = 'application/json';
-    const response = await fetch(`${base}${url}`, { method, headers, body: form || (body && JSON.stringify(body)) });
+    if (raw) headers['Content-Type'] = 'application/octet-stream';
+    const response = await fetch(`${base}${url}`, { method, headers, body: raw || (body && JSON.stringify(body)) });
     return { status: response.status, json: await response.json().catch(() => null) };
   };
 }
@@ -108,18 +110,48 @@ test('rejections require a note and are visible to the uploader', async () => {
 
 test('uploads are verified and stored pending approval', async () => {
   const user = await signIn('user');
+  const admin = await signIn('site_admin');
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
-  const form = new FormData();
-  form.append('title', 'Logo');
-  form.append('file', new Blob([png], { type: 'image/png' }), 'logo.png');
-  const ok = await user('/api/content', { method: 'POST', form });
+  const started = await user('/api/uploads', { method: 'POST', body: { title: 'Logo', name: 'logo.png', mime: 'image/png', size: png.length } });
+  assert.equal(started.status, 201);
+  const ok = await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png });
   assert.equal(ok.status, 201);
+  assert.equal(ok.json.done, true);
   assert.equal(ok.json.status, 'pending');
+  const queue = await admin('/api/content?scope=review');
+  assert.ok(queue.json.items.some(item => item.id === ok.json.id && item.size === png.length));
+  assert.equal((await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png })).status, 404, 'finished uploads are closed');
 
-  const fake = new FormData();
-  fake.append('title', 'Not really a PNG');
-  fake.append('file', new Blob(['hello'], { type: 'image/png' }), 'fake.png');
-  assert.equal((await user('/api/content', { method: 'POST', form: fake })).status, 400);
+  const fake = await user('/api/uploads', { method: 'POST', body: { title: 'Not really a PNG', name: 'fake.png', mime: 'image/png', size: 5 } });
+  assert.equal((await user(`/api/uploads/${fake.json.id}?offset=0`, { method: 'PUT', raw: Buffer.from('hello') })).status, 400);
+  assert.equal((await user(`/api/uploads/${fake.json.id}?offset=0`, { method: 'PUT', raw: Buffer.from('hello') })).status, 404, 'rejected uploads are discarded');
+
+  assert.equal((await user('/api/uploads', { method: 'POST', body: { title: 'Program', name: 'a.exe', mime: 'application/x-msdownload', size: 10 } })).status, 400);
+  assert.equal((await user('/api/uploads', { method: 'POST', body: { title: 'Huge', name: 'a.mp4', mime: 'video/mp4', size: 101 * 1024 * 1024 } })).status, 400);
+});
+
+test('large uploads arrive in ordered chunks and can be cancelled', async () => {
+  const user = await signIn('user');
+  const other = await signIn('org_admin');
+  const size = 256 * 1024 + 100;
+  const file = Buffer.alloc(size, 0x61);
+  file.write('%PDF-1.7', 0, 'latin1');
+  const { json: { id } } = await user('/api/uploads', { method: 'POST', body: { title: 'Big doc', name: 'big.pdf', mime: 'application/pdf', size } });
+  assert.equal((await other(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) })).status, 404, 'only the uploader can send chunks');
+  assert.equal((await user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 1000) })).status, 400, 'middle chunks must be 256 KB multiples');
+  const first = await user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) });
+  assert.deepEqual(first.json, { done: false, received: 256 * 1024 });
+  const outOfOrder = await user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) });
+  assert.equal(outOfOrder.status, 409);
+  assert.equal(outOfOrder.json.received, 256 * 1024);
+  const last = await user(`/api/uploads/${id}?offset=${256 * 1024}`, { method: 'PUT', raw: file.subarray(256 * 1024) });
+  assert.equal(last.status, 201);
+  const mine = await user('/api/content?scope=mine');
+  assert.equal(mine.json.items.find(item => item.id === last.json.id).size, size);
+
+  const cancelled = await user('/api/uploads', { method: 'POST', body: { title: 'Cancel me', name: 'c.pdf', mime: 'application/pdf', size } });
+  assert.equal((await user(`/api/uploads/${cancelled.json.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await user(`/api/uploads/${cancelled.json.id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) })).status, 404);
 });
 
 test('people can sign up, sign in and are rejected with bad credentials', async () => {
@@ -221,4 +253,30 @@ test('drives can be registered before Google is configured and accept every file
   assert.equal(node.connected, false);
   assert.equal('types' in node, false);
   assert.equal((await admin(`/api/storage/${node.id}`, { method: 'DELETE' })).status, 200);
+});
+
+test('serverless hosts refuse file uploads until a Google Drive is connected', async () => {
+  const serverless = createApp({ production: false, localStorage: false, dataDir, databaseUrl: 'file::memory:', origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: [] });
+  await serverless.locals.ready;
+  await serverless.locals.db.run('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)',
+    'sl-admin', 'admin@example.test', 'Admin', 'site_admin', new Date().toISOString(), hashPassword(TEST_PASSWORD));
+  const listener = await new Promise(resolve => { const s = serverless.listen(0, '127.0.0.1', () => resolve(s)); });
+  const url = `http://127.0.0.1:${listener.address().port}`;
+  try {
+    const login = await fetch(`${url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+      body: JSON.stringify({ email: 'admin@example.test', password: TEST_PASSWORD }) });
+    const headers = { Cookie: login.headers.get('set-cookie').split(';')[0], Origin: ORIGIN, 'Content-Type': 'application/json' };
+    const storage = await (await fetch(`${url}/api/storage`, { headers })).json();
+    assert.equal(storage.local, null);
+    const upload = await fetch(`${url}/api/uploads`, { method: 'POST', headers,
+      body: JSON.stringify({ title: 'Logo', name: 'logo.png', mime: 'image/png', size: 16 }) });
+    assert.equal(upload.status, 503);
+    const forced = await fetch(`${url}/api/uploads`, { method: 'POST', headers,
+      body: JSON.stringify({ title: 'Logo', name: 'logo.png', mime: 'image/png', size: 16, targetDriveId: 'local' }) });
+    assert.equal(forced.status, 400);
+  } finally {
+    listener.closeAllConnections();
+    await new Promise(resolve => listener.close(resolve));
+    serverless.locals.db.close();
+  }
 });
