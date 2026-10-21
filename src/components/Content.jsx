@@ -1,10 +1,47 @@
 import React, { useState } from 'react';
-import { Bookmark, BookmarkCheck, Download, ExternalLink, Eye } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Download, ExternalLink, Eye, Share2 } from 'lucide-react';
 import { fileUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
 import { Avatar, Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
+
+export const canShare = item => item.status === 'approved' && item.visibility !== 'private';
+
+export function contentLink(item) {
+  const url = new URL('/', window.location.origin);
+  url.searchParams.set('content', item.id);
+  url.hash = '/library';
+  return url.toString();
+}
+
+/** Opens the native share sheet when available, otherwise copies the link. Returns 'shared', 'copied' or null. */
+export async function shareContent(item) {
+  const url = contentLink(item);
+  if (navigator.share) {
+    try { await navigator.share({ title: item.title, url }); return 'shared'; }
+    catch (error) { if (error?.name === 'AbortError') return null; }
+  }
+  try { await navigator.clipboard.writeText(url); return 'copied'; }
+  catch { window.prompt('Copy this link', url); return null; }
+}
+
+function ViewCount({ value, className }) {
+  return (
+    <span className={cx('inline-flex shrink-0 items-center gap-1', className)} title={`${value || 0} ${value === 1 ? 'view' : 'views'}`}>
+      <Eye className="h-3.5 w-3.5" />{value || 0}
+    </span>
+  );
+}
+
+export function ShareButton({ item, onShare, className }) {
+  return (
+    <button type="button" onClick={() => onShare(item)} aria-label={`Share ${item.title}`}
+      className={cx('rounded-md p-1 text-slate-400 transition hover:text-slate-700', className)}>
+      <Share2 className="h-4 w-4" />
+    </button>
+  );
+}
 
 export function ContentThumb({ item, className }) {
   const meta = TYPE_META[item.type] || TYPE_META.link;
@@ -22,7 +59,7 @@ export function ContentThumb({ item, className }) {
   );
 }
 
-export function ContentCard({ item, onPreview, onBookmark, showStatus, footer }) {
+export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, footer }) {
   const meta = TYPE_META[item.type] || TYPE_META.link;
   return (
     <article className="card group flex flex-col overflow-hidden transition duration-200 hover:-translate-y-1 hover:shadow-pop">
@@ -33,12 +70,15 @@ export function ContentCard({ item, onPreview, onBookmark, showStatus, footer })
       <div className="flex flex-1 flex-col p-4">
         <div className="flex items-start justify-between gap-2">
           <h3 className="line-clamp-2 text-sm font-semibold text-slate-900">{item.title}</h3>
-          {onBookmark && (
-            <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'}
-              className={cx('-mr-1 -mt-0.5 rounded-md p-1 transition', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
-              {item.bookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
-            </button>
-          )}
+          <div className="-mr-1 -mt-0.5 flex shrink-0 items-center">
+            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} />}
+            {onBookmark && (
+              <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'}
+                className={cx('rounded-md p-1 transition', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
+                {item.bookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+              </button>
+            )}
+          </div>
         </div>
         {item.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{item.description}</p>}
         {showStatus && (
@@ -50,7 +90,10 @@ export function ContentCard({ item, onPreview, onBookmark, showStatus, footer })
         <div className="mt-auto flex items-center gap-2 pt-4 text-xs text-slate-500">
           <Avatar name={item.uploader} size="sm" />
           <span className="truncate">{item.uploader}</span>
-          <span className="ml-auto shrink-0">{timeAgo(item.created_at)}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2.5">
+            {item.status === 'approved' && <ViewCount value={item.views} />}
+            {timeAgo(item.created_at)}
+          </span>
         </div>
         {footer && <div className="mt-4 border-t border-slate-100 pt-3">{footer}</div>}
       </div>
@@ -58,49 +101,37 @@ export function ContentCard({ item, onPreview, onBookmark, showStatus, footer })
   );
 }
 
-export function PreviewModal({ item, onClose, actions, user, onVisibilityChange }) {
-  const [copied, setCopied] = useState(false);
-  const [visibilityBusy, setVisibilityBusy] = useState(false);
+export function PreviewModal({ item, onClose, actions, onShare }) {
   const { openPlayer } = useMediaPlayer();
   if (!item) return null;
   const meta = TYPE_META[item.type] || TYPE_META.link;
   const src = fileUrl(item.id, true);
-  const canManageVisibility = item.status === 'approved' && user && (user.role === 'site_admin' || item.uploader_id === user.id);
   const isMedia = item.type === 'audio' || item.type === 'video';
   let body;
   if (item.type === 'image') body = <img src={src} alt={item.title} className="mx-auto max-h-[60vh] rounded-lg object-contain" />;
   else if (isMedia) body = <div className="rounded-lg bg-slate-50 p-6 text-center"><p className="text-sm text-slate-600">Open this {item.type} in the persistent player to keep listening while you browse.</p>
     <Button className="mt-4" onClick={() => openPlayer(item)}>{item.type === 'video' ? 'Play video' : 'Listen now'}</Button></div>;
-  else if (item.type === 'doc') body = <iframe title={item.title} src={src} className="h-[60vh] w-full rounded-lg border border-slate-200" />;
+  else if (item.type === 'doc' && ['application/pdf', 'text/plain'].includes(item.mime)) body = <iframe title={item.title} src={src} className="h-[60vh] w-full rounded-lg border border-slate-200" />;
+  else if (item.type !== 'link') body = <div className="flex flex-col items-center gap-3 rounded-lg bg-slate-50 p-8 text-center"><meta.icon className="h-10 w-10 text-slate-400" strokeWidth={1.5} />
+    <p className="break-all text-sm font-medium text-slate-700">{item.original_name || item.title}</p></div>;
   else body = <div className="rounded-lg border border-slate-200 bg-slate-50 p-5"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">External link</p>
     <p className="mt-1 break-all text-sm text-slate-800">{item.url}</p></div>;
-  async function copyPublicLink() {
-    const url = new URL('/', window.location.origin); url.searchParams.set('content', item.id); url.hash = '/library';
-    try { await navigator.clipboard.writeText(url.toString()); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
-    catch { window.prompt('Copy this public link', url.toString()); }
-  }
-  async function toggleVisibility() {
-    if (!onVisibilityChange) return;
-    setVisibilityBusy(true);
-    try { await onVisibilityChange(item, item.visibility === 'private' ? 'public' : 'private'); }
-    finally { setVisibilityBusy(false); }
-  }
   return (
     <Modal open onClose={onClose} title={item.title} size="lg" footer={(
       <>
-        {item.status === 'approved' && item.visibility === 'public' && <Button variant="secondary" onClick={copyPublicLink}>{copied ? 'Link copied' : 'Copy public link'}</Button>}
-        {canManageVisibility && <Button variant="secondary" loading={visibilityBusy} onClick={toggleVisibility}>Make {item.visibility === 'private' ? 'public' : 'private'}</Button>}
+        {onShare && canShare(item) && <Button variant="secondary" icon={Share2} onClick={() => onShare(item)}>Share</Button>}
         {actions}
         {item.type === 'link' ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
           : <Button href={fileUrl(item.id)} icon={Download}>Download</Button>}
       </>
     )}>
       {body}
-      <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+      <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-5">
         <div><dt className="text-slate-500">Type</dt><dd className="font-medium text-slate-900">{meta.label}</dd></div>
         <div><dt className="text-slate-500">Submitted by</dt><dd className="truncate font-medium text-slate-900">{item.uploader}</dd></div>
         <div><dt className="text-slate-500">Submitted</dt><dd className="font-medium text-slate-900">{new Date(item.created_at).toLocaleDateString()}</dd></div>
         <div><dt className="text-slate-500">{item.type === 'link' ? 'Website' : 'Size'}</dt><dd className="truncate font-medium text-slate-900">{item.type === 'link' ? hostOf(item.url) : formatBytes(item.size)}</dd></div>
+        {item.status === 'approved' && <div><dt className="text-slate-500">Views</dt><dd className="font-medium text-slate-900"><ViewCount value={item.views} /></dd></div>}
       </dl>
       {item.description && <p className="mt-4 whitespace-pre-line text-sm text-slate-600">{item.description}</p>}
     </Modal>

@@ -10,13 +10,20 @@ import { CHUNK_SIZE, createStorage, driveClient, encryptToken, isConnected, oaut
 
 const TYPES = ['image', 'video', 'audio', 'doc', 'link'];
 const FILE_TYPES = TYPES.filter(type => type !== 'link');
+// Formats the browser may display inline. Any other file type is accepted but only ever served as a sandboxed download.
 const MIME_TYPES = {
   'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image',
   'video/mp4': 'video', 'video/webm': 'video',
   'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/x-wav': 'audio', 'audio/ogg': 'audio',
   'application/pdf': 'doc', 'text/plain': 'doc',
 };
+const normalizeMime = mime => {
+  const value = String(mime || '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/.test(value) ? value : 'application/octet-stream';
+};
+const classify = mime => MIME_TYPES[mime] || ['image', 'video', 'audio'].find(type => mime.startsWith(`${type}/`)) || 'doc';
 const UPLOAD_TTL_MS = 24 * 3600_000;
+const POINTS_PER_APPROVAL = 10;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => Object.assign(new Error(message), { status, expose: true });
 const h = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -93,7 +100,7 @@ function verifySignature(chunk, mime, size) {
     'audio/ogg': ascii.startsWith('OggS'),
     'text/plain': size > 0 && !buffer.includes(0) && !starts('4d5a'),
   };
-  if (!matches[mime]) throw fail(400, 'The file contents do not match the selected file format.');
+  if (mime in matches && !matches[mime]) throw fail(400, 'The file contents do not match the selected file format.');
 }
 
 export function createApp(overrides = {}) {
@@ -278,7 +285,8 @@ export function createApp(overrides = {}) {
 
   app.use('/api', authenticated);
   const contentQuery = `SELECT c.*, u.name AS uploader, r.name AS reviewer,
-    EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked
+    EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked,
+    (SELECT count(*) FROM content_views v WHERE v.content_id = c.id) AS views
     FROM content c JOIN users u ON u.id = c.uploader_id
     LEFT JOIN users r ON r.id = c.reviewed_by`;
   function visible(item, user) {
@@ -311,7 +319,28 @@ export function createApp(overrides = {}) {
       ? await count("SELECT count(*) AS n FROM content WHERE status = 'pending'")
       : await count("SELECT count(*) AS n FROM content WHERE status = 'pending' AND uploader_id = ?", req.user.id);
     const members = await count('SELECT count(*) AS n FROM users');
-    res.json({ approved, contributions, pending, members });
+    const typeRows = await db.all(`SELECT type, count(*) AS files, COALESCE(sum(size), 0) AS bytes FROM content
+      WHERE status = 'approved' AND visibility = 'public' GROUP BY type`);
+    const types = Object.fromEntries(typeRows.map(row => [row.type, { files: Number(row.files), bytes: Number(row.bytes) }]));
+    const drives = (await db.all('SELECT * FROM drives WHERE enabled = 1')).filter(node => isConnected(node, config));
+    const measured = drives.filter(node => node.quota_limit != null);
+    const stored = await db.get("SELECT COALESCE(sum(size), 0) AS bytes FROM content WHERE status != 'rejected'");
+    const storage = {
+      drives: drives.length,
+      used: measured.length ? measured.reduce((sum, node) => sum + Number(node.quota_usage || 0), 0) : null,
+      total: measured.length ? measured.reduce((sum, node) => sum + Number(node.quota_limit), 0) : null,
+      content: Number(stored.bytes),
+    };
+    res.json({ approved, contributions, pending, members, types, storage });
+  }));
+  app.get('/api/leaderboard', h(async (req, res) => {
+    const rows = await db.all(`SELECT u.id, u.name, u.role, count(c.id) * ${POINTS_PER_APPROVAL} AS points FROM users u
+      JOIN content c ON c.uploader_id = u.id AND c.status = 'approved'
+      WHERE u.suspended = 0 GROUP BY u.id, u.name, u.role ORDER BY points DESC, u.name COLLATE NOCASE`);
+    const ranked = rows.map(row => ({ ...row, points: Number(row.points) }))
+      .map((row, index, all) => ({ ...row, rank: all.findIndex(other => other.points === row.points) + 1 }));
+    const me = ranked.find(row => row.id === req.user.id) || { id: req.user.id, name: req.user.name, role: req.user.role, points: 0, rank: null };
+    res.json({ top: ranked.slice(0, 10), me, pointsPerApproval: POINTS_PER_APPROVAL });
   }));
   app.get('/api/storage', h(async (req, res) => {
     const rows = await db.all(`SELECT d.*, (SELECT count(*) FROM content c WHERE c.storage_node = d.id) AS file_count
@@ -388,15 +417,15 @@ export function createApp(overrides = {}) {
     const description = text(req.body.description || '', 'Description', 2000, 0);
     const name = text(req.body.name, 'File name', 255);
     const size = Number(req.body.size);
-    const type = MIME_TYPES[req.body.mime];
-    if (!type) throw fail(400, 'Unsupported file type. Use JPG, PNG, WebP, MP4, WebM, MP3, WAV, OGG, PDF, or TXT.');
+    const mime = normalizeMime(req.body.mime);
+    const type = classify(mime);
     if (!Number.isInteger(size) || size < 1) throw fail(400, 'Empty files cannot be uploaded.');
     if (size > config.maxUploadMB * 1024 * 1024) throw fail(400, `File exceeds the ${config.maxUploadMB} MB upload limit.`);
     const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
     const id = randomUUID();
-    const started = await storage.startUpload({ id, target, name, mime: req.body.mime, size });
+    const started = await storage.startUpload({ id, target, name, mime, size });
     await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, req.body.mime, name, size,
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, mime, name, size,
     started.node, started.sessionUri, Date.now());
     res.status(201).json({ id, chunkSize: CHUNK_SIZE });
   }));
@@ -542,6 +571,13 @@ export function createApp(overrides = {}) {
     else await db.run('INSERT INTO bookmarks VALUES (?, ?)', req.user.id, item.id);
     res.json({ bookmarked: !current });
   }));
+  app.post('/api/content/:id/view', h(async (req, res) => {
+    const { item } = await getContent(req);
+    if (item.status === 'approved') {
+      await db.run('INSERT OR IGNORE INTO content_views (content_id, user_id, viewed_at) VALUES (?, ?, ?)', item.id, req.user.id, new Date().toISOString());
+    }
+    res.json({ views: await count('SELECT count(*) AS n FROM content_views WHERE content_id = ?', item.id) });
+  }));
   app.delete('/api/content/:id', h(async (req, res) => {
     const { item } = await getContent(req);
     const isAdmin = req.user.role === 'site_admin';
@@ -566,6 +602,7 @@ export function createApp(overrides = {}) {
       }
     }
     await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
+    await db.run('DELETE FROM content_views WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);
     if (!deleted.changes) throw fail(409, 'The content changed while it was being removed. Refresh and try again.');
     await audit(db, req.user.id, 'Deleted content', item.title);
@@ -576,9 +613,11 @@ export function createApp(overrides = {}) {
     if (!item.storage_key) throw fail(404, 'This contribution is a link, not a file.');
     const file = await storage.read(item, req.get('range'));
     const name = encodeURIComponent(item.original_name || item.title).replace(/'/g, '%27');
-    res.set('Content-Disposition', `${req.query.inline === '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${name}`);
+    const previewable = Boolean(MIME_TYPES[item.mime]);
+    res.set('Content-Disposition', `${previewable && req.query.inline === '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${name}`);
     res.set('X-Frame-Options', 'SAMEORIGIN');
-    res.type(item.mime);
+    if (!previewable) res.set('Content-Security-Policy', 'sandbox');
+    res.type(item.mime || 'application/octet-stream');
     res.set('Accept-Ranges', 'bytes');
     const length = file.contentLength ?? file.headers?.get('content-length');
     const range = file.contentRange ?? file.headers?.get('content-range');

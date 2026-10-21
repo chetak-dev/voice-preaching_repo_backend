@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, Plus, UploadCloud, Users,
+  Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, Plus, Trophy, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
 import { Avatar, Badge, Button, Logo, Modal, ROLE_META, Spinner, ToastProvider, cx, useToast } from './components/ui.jsx';
 import { PersistentMediaPlayer, useMediaPlayer } from './components/MediaPlayer.jsx';
 import Activity from './views/Activity.jsx';
 import Library from './views/Library.jsx';
+import Leaderboard from './views/Leaderboard.jsx';
 import Login from './views/Login.jsx';
 import Members from './views/Members.jsx';
 import Review from './views/Review.jsx';
@@ -18,13 +19,14 @@ const ITEMS = {
   upload: { label: 'Contribute', icon: UploadCloud, tone: 'bg-pink-500/15 text-pink-300', soft: 'bg-pink-50 text-pink-600' },
   mine: { label: 'My submissions', short: 'Mine', icon: FileClock, tone: 'bg-sky-500/15 text-sky-300', soft: 'bg-sky-50 text-sky-600' },
   saved: { label: 'Saved', icon: Bookmark, tone: 'bg-amber-500/15 text-amber-300', soft: 'bg-amber-50 text-amber-600' },
+  leaderboard: { label: 'Leaderboard', short: 'Top 10', icon: Trophy, tone: 'bg-yellow-500/15 text-yellow-300', soft: 'bg-yellow-50 text-yellow-600' },
   review: { label: 'Review queue', short: 'Review', icon: ClipboardCheck, roles: ['site_admin', 'org_admin'], badge: true, tone: 'bg-orange-500/15 text-orange-300', soft: 'bg-orange-50 text-orange-600' },
   members: { label: 'Members', icon: Users, roles: ['site_admin'], tone: 'bg-emerald-500/15 text-emerald-300', soft: 'bg-emerald-50 text-emerald-600' },
   storage: { label: 'Storage', icon: HardDrive, roles: ['site_admin'], tone: 'bg-cyan-500/15 text-cyan-300', soft: 'bg-cyan-50 text-cyan-600' },
   activity: { label: 'Activity log', short: 'Activity', icon: History, roles: ['site_admin'], tone: 'bg-indigo-500/15 text-indigo-300', soft: 'bg-indigo-50 text-indigo-600' },
 };
 const SECTIONS = [
-  ['Content', ['library', 'upload', 'mine', 'saved']],
+  ['Content', ['library', 'upload', 'mine', 'saved', 'leaderboard']],
   ['Administration', ['review', 'members', 'storage', 'activity']],
 ];
 const BOTTOM_NAV = {
@@ -90,6 +92,7 @@ function Shell({ user, config, onSignOut }) {
   const page = {
     library: <Library key="library" scope="library" {...props} />,
     saved: <Library key="saved" scope="saved" {...props} />,
+    leaderboard: <Leaderboard {...props} />,
     mine: <Library key="mine" scope="mine" {...props} />,
     upload: <Upload {...props} />,
     review: <Review {...props} />,
@@ -248,7 +251,7 @@ function Shell({ user, config, onSignOut }) {
             <Button variant="danger" icon={LogOut} loading={signingOut} onClick={doSignOut}>Sign out</Button>
           </>
         )}>
-        <p className="text-sm text-slate-600">You are signed in as <span className="font-medium text-slate-900">{user.email}</span>. You will need to sign in again to use VOICE.</p>
+        <p className="text-sm text-slate-600">{user.email}</p>
       </Modal>
     </div>
   );

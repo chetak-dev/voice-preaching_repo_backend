@@ -9,7 +9,7 @@ export default function Activity() {
   const { data, loading, error, reload } = useAsync(() => api('/audit'), []);
   return (
     <div>
-      <PageHeader title="Activity log" description="The latest 100 administrative and content events across the platform." />
+      <PageHeader title="Activity log" />
       {error && <ErrorBanner error={error} onRetry={reload} />}
       {loading && !data && <Spinner />}
       {data && !data.entries.length && <EmptyState icon={History} title="No activity yet" />}

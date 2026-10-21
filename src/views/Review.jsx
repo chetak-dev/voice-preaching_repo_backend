@@ -63,18 +63,17 @@ export default function Review({ user, onChanged }) {
 
   return (
     <div>
-      <PageHeader title="Review queue"
-        description="Search pending contributions, approve eligible submissions in batches of up to 25, or review each one with a note." />
+      <PageHeader title="Review queue" />
       {error && <ErrorBanner error={error} onRetry={reload} />}
       {loading && !data && <Spinner />}
-      {data && !items.length && <EmptyState icon={Inbox} title="You're all caught up" description="New submissions will appear here for approval." />}
+      {data && !items.length && <EmptyState icon={Inbox} title="You're all caught up" />}
       {items.length > 0 && (
         <div className="card mb-5 space-y-3 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input className="input pl-9" value={query} onChange={event => setQuery(event.target.value)}
-                placeholder="Search title, description, or contributor" aria-label="Search review queue" />
+                placeholder="Search" aria-label="Search review queue" />
             </div>
             <Button variant="success" icon={Check} loading={busy === 'bulk'} disabled={!selected.length || Boolean(busy)} onClick={approveSelected}>
               Approve {selected.length} selected
@@ -89,7 +88,7 @@ export default function Review({ user, onChanged }) {
           </div>
         </div>
       )}
-      {items.length > 0 && !filtered.length && <EmptyState icon={Search} title="No matching submissions" description="Try a different search term." />}
+      {items.length > 0 && !filtered.length && <EmptyState icon={Search} title="No matching submissions" />}
       {items.length > 0 && filtered.length > 0 && (
         <div className="space-y-3">
           {filtered.map(item => {
@@ -133,7 +132,7 @@ export default function Review({ user, onChanged }) {
         </div>
       )}
 
-      <PreviewModal item={preview} user={user} onClose={() => setPreview(null)}
+      <PreviewModal item={preview} onClose={() => setPreview(null)}
         actions={preview && !isOwn(preview) && (
           <>
             <Button variant="secondary" icon={X} className="text-rose-600" onClick={() => { setRejecting(preview); setPreview(null); }}>Reject</Button>
@@ -142,7 +141,6 @@ export default function Review({ user, onChanged }) {
         )} />
 
       <Modal open={Boolean(rejecting)} onClose={() => setRejecting(null)} size="sm" title="Reject submission"
-        description="The contributor will see this note under My submissions."
         footer={(
           <>
             <Button variant="secondary" onClick={() => setRejecting(null)}>Cancel</Button>
@@ -150,9 +148,7 @@ export default function Review({ user, onChanged }) {
           </>
         )}>
         <label className="label" htmlFor="note">Reason</label>
-        <textarea id="note" rows={4} className="input" maxLength={1000} autoFocus value={note} onChange={event => setNote(event.target.value)}
-          placeholder="e.g. Please add a description and credit the original speaker." />
-        <p className="mt-1.5 text-xs text-slate-500">At least 5 characters.</p>
+        <textarea id="note" rows={4} className="input" maxLength={1000} autoFocus value={note} onChange={event => setNote(event.target.value)} />
       </Modal>
     </div>
   );

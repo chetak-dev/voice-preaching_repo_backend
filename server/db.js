@@ -58,6 +58,10 @@ const SCHEMA = `
     user_id TEXT NOT NULL REFERENCES users(id), content_id TEXT NOT NULL REFERENCES content(id),
     PRIMARY KEY(user_id, content_id)
   );
+  CREATE TABLE IF NOT EXISTS content_views (
+    content_id TEXT NOT NULL REFERENCES content(id), user_id TEXT NOT NULL REFERENCES users(id),
+    viewed_at TEXT NOT NULL, PRIMARY KEY(content_id, user_id)
+  );
   CREATE TABLE IF NOT EXISTS audit (
     id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id),
     action TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL

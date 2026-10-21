@@ -142,7 +142,20 @@ test('uploads are verified and stored pending approval', async () => {
   assert.equal((await user(`/api/uploads/${fake.json.id}?offset=0`, { method: 'PUT', raw: Buffer.from('hello') })).status, 400);
   assert.equal((await user(`/api/uploads/${fake.json.id}?offset=0`, { method: 'PUT', raw: Buffer.from('hello') })).status, 404, 'rejected uploads are discarded');
 
-  assert.equal((await user('/api/uploads', { method: 'POST', body: { title: 'Program', name: 'a.exe', mime: 'application/x-msdownload', size: 10 } })).status, 400);
+  const html = Buffer.from('<script>alert(1)</script>');
+  const page = await user('/api/uploads', { method: 'POST', body: { title: 'Web page', name: 'page.html', mime: 'text/html', size: html.length } });
+  assert.equal(page.status, 201, 'any file type is accepted');
+  const saved = await user(`/api/uploads/${page.json.id}?offset=0`, { method: 'PUT', raw: html });
+  assert.equal(saved.status, 201);
+  const pageItem = (await user('/api/content?scope=mine')).json.items.find(item => item.id === saved.json.id);
+  assert.equal(pageItem.type, 'doc');
+  const login = await post('/api/auth/login', { email: ACCOUNTS.user, password: TEST_PASSWORD });
+  const served = await fetch(`${base}/api/content/${saved.json.id}/file?inline=1`, { headers: { Cookie: login.headers.get('set-cookie').split(';')[0] } });
+  assert.match(served.headers.get('content-disposition'), /^attachment/, 'non-previewable files are always downloads');
+  assert.equal(served.headers.get('content-security-policy'), 'sandbox');
+  await served.arrayBuffer();
+  const unknown = await user('/api/uploads', { method: 'POST', body: { title: 'Program', name: 'a.bin', mime: '', size: 10 } });
+  assert.equal(unknown.status, 201, 'files without a reported type are accepted');
   assert.equal((await user('/api/uploads', { method: 'POST', body: { title: 'Huge', name: 'a.mp4', mime: 'video/mp4', size: 101 * 1024 * 1024 } })).status, 400);
 });
 
@@ -372,4 +385,72 @@ test('serverless hosts refuse file uploads until a Google Drive is connected', a
     await new Promise(resolve => listener.close(resolve));
     serverless.locals.db.close();
   }
+});
+test('overview reports approved items and size per type plus storage totals', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const before = (await user('/api/overview')).json;
+  assert.ok(before.storage && typeof before.storage.content === 'number');
+  const linksBefore = before.types.link?.files || 0;
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const started = await user('/api/uploads', { method: 'POST', body: { title: 'Stats image', name: 'stats.png', mime: 'image/png', size: png.length } });
+  const done = await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png });
+  const link = await user('/api/content', { method: 'POST', body: { title: 'Stats link', url: 'https://example.org/stats' } });
+  const imagesBefore = before.types.image || { files: 0, bytes: 0 };
+  assert.equal((await user('/api/overview')).json.types.image?.files || 0, imagesBefore.files, 'pending items are not counted');
+  for (const id of [done.json.id, link.json.id]) {
+    assert.equal((await admin(`/api/content/${id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 200);
+  }
+  const after = (await user('/api/overview')).json;
+  assert.deepEqual(after.types.image, { files: imagesBefore.files + 1, bytes: imagesBefore.bytes + png.length });
+  assert.equal(after.types.link.files, linksBefore + 1);
+  assert.equal(after.storage.drives, 0);
+  assert.equal(after.storage.total, null);
+});
+
+test('views count each member once and only for approved content', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const viewer = await signIn('viewer@example.test');
+  const link = await user('/api/content', { method: 'POST', body: { title: 'Views link', url: 'https://example.org/views' } });
+  assert.equal((await user(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 0, 'pending content is not counted');
+  await admin(`/api/content/${link.json.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  assert.equal((await viewer(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 1);
+  assert.equal((await viewer(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 1);
+  assert.equal((await admin(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 2);
+  const listed = (await user('/api/content?scope=library')).json.items.find(item => item.id === link.json.id);
+  assert.equal(listed.views, 2);
+  assert.equal((await admin(`/api/content/${link.json.id}`, { method: 'DELETE' })).status, 200);
+});
+
+test('uploaders cannot delete their submissions once approved', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const pending = (await user('/api/content', { method: 'POST', body: { title: 'Withdraw me', url: 'https://example.org/w' } })).json;
+  assert.equal((await user(`/api/content/${pending.id}`, { method: 'DELETE' })).status, 200, 'pending items can be withdrawn');
+  const approved = (await user('/api/content', { method: 'POST', body: { title: 'Keep me', url: 'https://example.org/k' } })).json;
+  await admin(`/api/content/${approved.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  assert.equal((await user(`/api/content/${approved.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await admin(`/api/content/${approved.id}`, { method: 'DELETE' })).status, 200);
+});
+
+test('leaderboard awards points per approved submission and shows the top 10 to everyone', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const pointsOf = board => board.top.find(entry => entry.id === board.me.id)?.points || 0;
+  const before = (await user('/api/leaderboard')).json;
+  assert.ok(before.top.length <= 10);
+  const ids = [];
+  for (const n of [1, 2]) {
+    const { json } = await user('/api/content', { method: 'POST', body: { title: `Points ${n}`, url: `https://example.org/p${n}` } });
+    ids.push(json.id);
+  }
+  assert.equal(pointsOf((await user('/api/leaderboard')).json), pointsOf(before), 'pending items earn nothing');
+  for (const id of ids) await admin(`/api/content/${id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  const after = (await user('/api/leaderboard')).json;
+  assert.equal(after.me.points, before.me.points + 20);
+  assert.ok(after.top.some(entry => entry.id === after.me.id && entry.rank >= 1));
+  assert.ok(after.top.every((entry, i, all) => i === 0 || all[i - 1].points >= entry.points));
+  assert.equal((await (await signIn('org_admin'))('/api/leaderboard')).status, 200);
+  for (const id of ids) await admin(`/api/content/${id}`, { method: 'DELETE' });
 });

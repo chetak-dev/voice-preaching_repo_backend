@@ -70,19 +70,17 @@ export default function Members({ user }) {
     const { member, action } = pending;
     if (action === 'role') {
       return member.role === 'org_admin'
-        ? { title: 'Remove org admin role?', body: `${member.name} will become a regular member and can no longer approve or reject submissions.`, cta: 'Remove role', variant: 'danger' }
-        : { title: 'Make org admin?', body: `${member.name} will be able to approve or reject submissions in the review queue. They cannot manage members, storage or the activity log.`, cta: 'Make org admin', variant: 'primary' };
+        ? { title: 'Remove org admin role?', body: member.name, cta: 'Remove role', variant: 'danger' }
+        : { title: 'Make org admin?', body: member.name, cta: 'Make org admin', variant: 'primary' };
     }
     return member.suspended
-      ? { title: 'Reactivate account?', body: `${member.name} will be able to sign in again.`, cta: 'Reactivate', variant: 'primary' }
-      : { title: 'Suspend account?', body: `${member.name} will be signed out immediately and won't be able to sign in until reactivated. Their content stays in place.`, cta: 'Suspend', variant: 'danger' };
+      ? { title: 'Reactivate account?', body: member.name, cta: 'Reactivate', variant: 'primary' }
+      : { title: 'Suspend account?', body: member.name, cta: 'Suspend', variant: 'danger' };
   })();
 
   return (
     <div>
-      <PageHeader
-        title="Members"
-        description="Appoint org admins to help review content, and manage who can access the platform." />
+      <PageHeader title="Members" />
 
       {error && <ErrorBanner error={error} onRetry={reload} />}
       {loading && !data && <Spinner />}
@@ -115,11 +113,11 @@ export default function Members({ user }) {
               </div>
               <div className="relative lg:w-72">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input className="input pl-9" placeholder="Search by name or email" value={query} onChange={e => setQuery(e.target.value)} />
+                <input className="input pl-9" placeholder="Search" value={query} onChange={e => setQuery(e.target.value)} />
               </div>
             </div>
 
-            {!members.length ? <div className="p-6"><EmptyState icon={Users} title="No members found" description="Try a different search or filter." /></div> : (
+            {!members.length ? <div className="p-6"><EmptyState icon={Users} title="No members found" /></div> : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">

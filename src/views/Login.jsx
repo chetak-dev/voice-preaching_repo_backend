@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, HardDrive, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, Lock, Mail, User } from 'lucide-react';
 import { api } from '../api.js';
 import { Button, Logo, cx } from '../components/ui.jsx';
 
@@ -14,15 +14,9 @@ function GoogleMark() {
   );
 }
 
-const FEATURES = [
-  [ShieldCheck, 'Moderated by design', 'Every contribution is reviewed by an admin before it is published.', 'from-emerald-400 to-teal-500'],
-  [Users, 'Built for community', 'Members contribute, admins keep the library trustworthy.', 'from-sky-400 to-blue-500'],
-  [HardDrive, 'Multi-Drive storage', 'Files are spread across multiple Google Drives automatically.', 'from-amber-400 to-orange-500'],
-];
-
 const modeFromHash = () => (window.location.hash === '#/signup' ? 'signup' : 'signin');
 
-function Field({ id, label, icon: Icon, error, hint, children }) {
+function Field({ id, label, icon: Icon, error, children }) {
   return (
     <div>
       <label className="label" htmlFor={id}>{label}</label>
@@ -30,7 +24,7 @@ function Field({ id, label, icon: Icon, error, hint, children }) {
         <Icon className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         {children}
       </div>
-      {error ? <p className="mt-1.5 text-xs font-medium text-rose-600">{error}</p> : hint && <p className="mt-1.5 text-xs text-slate-500">{hint}</p>}
+      {error && <p className="mt-1.5 text-xs font-medium text-rose-600">{error}</p>}
     </div>
   );
 }
@@ -94,17 +88,6 @@ export default function Login({ config, onSignedIn }) {
           <h1 className="text-2xl font-bold leading-tight tracking-tight sm:text-3xl lg:text-5xl">
             Every voice, <span className="text-amber-200">one trusted library.</span>
           </h1>
-          <p className="mt-3 text-sm text-white/80 lg:mt-5 lg:text-base">
-            Share lectures, audio, documents, images and links. Reviewed, organized and ready for your community.
-          </p>
-          <ul className="mt-10 hidden space-y-5 lg:block">
-            {FEATURES.map(([Icon, title, text, tone]) => (
-              <li key={title} className="flex gap-4 rounded-2xl bg-white/10 p-4 ring-1 ring-white/15 backdrop-blur-sm">
-                <div className={cx('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br shadow-md', tone)}><Icon className="h-5 w-5" /></div>
-                <div><p className="text-sm font-semibold">{title}</p><p className="text-sm text-white/70">{text}</p></div>
-              </li>
-            ))}
-          </ul>
         </div>
         <p className="relative mt-12 hidden text-xs text-white/50 lg:block">© {new Date().getFullYear()} VOICE</p>
       </div>
@@ -122,20 +105,14 @@ export default function Login({ config, onSignedIn }) {
             ))}
           </div>
 
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900">{signup ? 'Create your account' : 'Welcome back'}</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            {signup ? 'Join VOICE to explore the library and share content.' : 'Sign in to continue to VOICE.'}
-          </p>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900">{signup ? 'Create account' : 'Welcome back'}</h2>
 
           <Button href={config?.googleConfigured ? '/api/auth/google' : undefined} variant="secondary" size="lg" className="mt-6 w-full" disabled={!config?.googleConfigured}>
             <GoogleMark /> {signup ? 'Sign up with Google' : 'Continue with Google'}
           </Button>
-          {config && !config.googleConfigured && (
-            <p className="mt-2 text-center text-xs text-slate-400">Google sign-in is not configured on this server.</p>
-          )}
 
           <div className="relative my-6 text-center text-xs font-medium text-slate-400">
-            <span className="relative z-10 bg-slate-50 px-3 lg:bg-white">or with email</span>
+            <span className="relative z-10 bg-slate-50 px-3 lg:bg-white">or</span>
             <div className="absolute inset-x-0 top-1/2 border-t border-slate-200" />
           </div>
 
@@ -151,7 +128,7 @@ export default function Login({ config, onSignedIn }) {
                 placeholder="you@example.com" value={form.email} onChange={set('email')} />
             </Field>
             <Field id="auth-password" label="Password" icon={Lock}
-              error={tooShort && 'Password must be at least 8 characters.'} hint={signup && 'At least 8 characters.'}>
+              error={tooShort && 'Password must be at least 8 characters.'}>
               <input id="auth-password" type={showPassword ? 'text' : 'password'} className="input pl-10 pr-11" required
                 autoComplete={signup ? 'new-password' : 'current-password'} maxLength={128}
                 placeholder={signup ? 'Create a password' : 'Your password'} value={form.password} onChange={set('password')} />
@@ -172,13 +149,6 @@ export default function Login({ config, onSignedIn }) {
               {signup ? 'Create account' : 'Sign in'}
             </Button>
           </form>
-
-          <p className="mt-6 text-center text-sm text-slate-500">
-            {signup ? 'Already have an account? ' : "Don't have an account? "}
-            <a href={signup ? '#/signin' : '#/signup'} className="font-semibold text-brand-700 hover:text-brand-800">
-              {signup ? 'Sign in' : 'Sign up'}
-            </a>
-          </p>
         </div>
       </div>
     </div>

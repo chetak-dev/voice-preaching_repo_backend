@@ -114,25 +114,23 @@ export function Spinner({ label = 'Loading…' }) {
   );
 }
 
-export function EmptyState({ icon: Icon, title, description, action }) {
+export function EmptyState({ icon: Icon, title, action }) {
   return (
     <div className="card flex flex-col items-center px-6 py-16 text-center">
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-voice text-white shadow-glow">
         <Icon className="h-7 w-7" />
       </div>
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      {description && <p className="mt-1 max-w-sm text-sm text-slate-500">{description}</p>}
       {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }
 
-export function PageHeader({ title, description, actions }) {
+export function PageHeader({ title, actions }) {
   return (
     <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between lg:mb-6">
       <div className="min-w-0 flex-1">
         <h1 className="hidden text-2xl font-bold tracking-tight text-slate-900 lg:block">{title}</h1>
-        {description && <p className="max-w-3xl text-sm text-slate-500 lg:mt-1">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
     </div>
