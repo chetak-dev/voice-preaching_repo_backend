@@ -38,6 +38,7 @@ const BOTTOM_NAV = {
 const allowed = (id, role) => !ITEMS[id].roles || ITEMS[id].roles.includes(role);
 const reveal = 'opacity-0 transition-opacity duration-200 group-hover/side:opacity-100 group-focus-within/side:opacity-100';
 const currentHash = () => window.location.hash.replace(/^#\/?/, '') || 'library';
+const VERSION_LABEL = `Version ${__APP_VERSION__}`;
 
 function CountBadge({ value, className }) {
   if (!value) return null;
@@ -177,6 +178,7 @@ function Shell({ user, config, onSignOut }) {
             </div>
           </div>
         </div>
+        <p className="relative mb-3 w-20 whitespace-nowrap text-center text-[10px] text-white/40">{VERSION_LABEL}</p>
       </aside>
       {/* Mobile top app bar */}
       <header className="pt-safe sticky top-0 z-30 bg-voice text-white shadow-md lg:hidden">
@@ -259,6 +261,7 @@ function Shell({ user, config, onSignOut }) {
               <button type="button" onClick={askSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50">
                 <LogOut className="h-5 w-5" /> Sign out
               </button>
+              <p className="px-3 pt-2 text-center text-[11px] text-slate-400">{VERSION_LABEL}</p>
             </div>
           </div>
         </div>

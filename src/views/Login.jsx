@@ -1,7 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, Lock, Mail, User } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, HardDrive, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
 import { api } from '../api.js';
 import { Button, Logo, cx } from '../components/ui.jsx';
+
+const FEATURES = [
+  [ShieldCheck, 'Moderated by design', 'Every contribution is reviewed by an admin before it is published.', 'from-emerald-400 to-teal-500'],
+  [Users, 'Built for community', 'Members contribute, admins keep the library trustworthy.', 'from-sky-400 to-blue-500'],
+  [HardDrive, 'Multi-Drive storage', 'Files are spread across multiple Google Drives automatically.', 'from-amber-400 to-orange-500'],
+];
 
 function GoogleMark() {
   return (
@@ -88,6 +94,17 @@ export default function Login({ config, onSignedIn }) {
           <h1 className="text-2xl font-bold leading-tight tracking-tight sm:text-3xl lg:text-5xl">
             Every voice, <span className="text-amber-200">one trusted library.</span>
           </h1>
+          <p className="mt-5 hidden text-base text-white/80 lg:block">
+            Share lectures, audio, documents, images and links. Reviewed, organized and ready for your community.
+          </p>
+          <ul className="mt-10 hidden space-y-5 lg:block">
+            {FEATURES.map(([Icon, title, text, tone]) => (
+              <li key={title} className="flex gap-4 rounded-2xl bg-white/10 p-4 ring-1 ring-white/15 backdrop-blur-sm">
+                <div className={cx('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br shadow-md', tone)}><Icon className="h-5 w-5" /></div>
+                <div><p className="text-sm font-semibold">{title}</p><p className="text-sm text-white/70">{text}</p></div>
+              </li>
+            ))}
+          </ul>
         </div>
         <p className="relative mt-12 hidden text-xs text-white/50 lg:block">© {new Date().getFullYear()} VOICE</p>
       </div>
