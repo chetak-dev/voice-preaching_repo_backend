@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, HardDrive, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
 import { api } from '../api.js';
 import { Button, Logo, cx } from '../components/ui.jsx';
 
 const FEATURES = [
   [ShieldCheck, 'Moderated by design', 'Every contribution is reviewed by an admin before it is published.', 'from-emerald-400 to-teal-500'],
   [Users, 'Built for community', 'Members contribute, admins keep the library trustworthy.', 'from-sky-400 to-blue-500'],
-  [HardDrive, 'Multi-Drive storage', 'Files are spread across multiple Google Drives automatically.', 'from-amber-400 to-orange-500'],
 ];
 
 function GoogleMark() {
@@ -25,7 +24,7 @@ const modeFromHash = () => (window.location.hash === '#/signup' ? 'signup' : 'si
 function Field({ id, label, icon: Icon, error, children }) {
   return (
     <div>
-      <label className="label" htmlFor={id}>{label}</label>
+      <label className="sr-only" htmlFor={id}>{label}</label>
       <div className="relative">
         <Icon className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         {children}
@@ -92,7 +91,7 @@ export default function Login({ config, onSignedIn }) {
         <div className="relative"><Logo size="lg" light /></div>
         <div className="relative mt-8 lg:mt-auto lg:max-w-lg">
           <h1 className="text-2xl font-bold leading-tight tracking-tight sm:text-3xl lg:text-5xl">
-            Every voice, <span className="text-amber-200">one trusted library.</span>
+            Your community's <span className="text-amber-200">trusted content library.</span>
           </h1>
           <p className="mt-5 hidden text-base text-white/80 lg:block">
             Share lectures, audio, documents, images and links. Reviewed, organized and ready for your community.
@@ -133,29 +132,29 @@ export default function Login({ config, onSignedIn }) {
             <div className="absolute inset-x-0 top-1/2 border-t border-slate-200" />
           </div>
 
-          <form onSubmit={submit} className="space-y-4">
+          <form onSubmit={submit} className="space-y-3">
             {signup && (
               <Field id="auth-name" label="Full name" icon={User}>
                 <input id="auth-name" className="input pl-10" autoComplete="name" required minLength={2} maxLength={100}
-                  placeholder="Your name" value={form.name} onChange={set('name')} />
+                  placeholder="Full name" value={form.name} onChange={set('name')} />
               </Field>
             )}
             <Field id="auth-email" label="Email" icon={Mail}>
               <input id="auth-email" type="email" inputMode="email" className="input pl-10" autoComplete="email" required
-                placeholder="you@example.com" value={form.email} onChange={set('email')} />
+                placeholder="Email address" value={form.email} onChange={set('email')} />
             </Field>
             <Field id="auth-password" label="Password" icon={Lock}
               error={tooShort && 'Password must be at least 8 characters.'}>
               <input id="auth-password" type={showPassword ? 'text' : 'password'} className="input pl-10 pr-11" required
                 autoComplete={signup ? 'new-password' : 'current-password'} maxLength={128}
-                placeholder={signup ? 'Create a password' : 'Your password'} value={form.password} onChange={set('password')} />
+                placeholder={signup ? 'Create a password (8+ characters)' : 'Password'} value={form.password} onChange={set('password')} />
               {passwordToggle}
             </Field>
             {signup && (
               <Field id="auth-confirm" label="Confirm password" icon={Lock} error={mismatch && 'Passwords do not match.'}>
                 <input id="auth-confirm" type={showPassword ? 'text' : 'password'} required autoComplete="new-password" maxLength={128}
                   className={cx('input pl-10 pr-11', mismatch && '!border-rose-400 focus:!ring-rose-500/15')}
-                  placeholder="Re-enter your password" value={form.confirm} onChange={set('confirm')} aria-invalid={mismatch || undefined} />
+                  placeholder="Confirm password" value={form.confirm} onChange={set('confirm')} aria-invalid={mismatch || undefined} />
                 {form.confirm && !mismatch && form.confirm === form.password && (
                   <CheckCircle2 className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-500" aria-label="Passwords match" />
                 )}
