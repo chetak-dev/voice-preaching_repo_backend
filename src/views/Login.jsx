@@ -139,7 +139,7 @@ export default function Login({ config, onSignedIn }) {
             <div className="absolute inset-x-0 top-1/2 border-t border-slate-200" />
           </div>
 
-          <form onSubmit={submit} className="space-y-4" noValidate>
+          <form onSubmit={submit} className="space-y-4">
             {signup && (
               <Field id="auth-name" label="Full name" icon={User}>
                 <input id="auth-name" className="input pl-10" autoComplete="name" required minLength={2} maxLength={100}

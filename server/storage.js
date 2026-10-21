@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
-import { existsSync, mkdirSync } from 'node:fs';
-import { appendFile, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream, mkdirSync } from 'node:fs';
+import { open, unlink, writeFile } from 'node:fs/promises';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -82,12 +82,31 @@ export async function refreshQuota(db, node, config) {
   return { usage, limit };
 }
 
-function boundedRange(range, size) {
-  const match = /^bytes=(\d+)-(\d*)$/.exec(range || '');
-  if (!match) return range;
-  const start = Number(match[1]);
-  const end = Math.min(match[2] ? Number(match[2]) : size - 1, start + MAX_RANGE - 1, size - 1);
-  return end >= start ? `bytes=${start}-${end}` : range;
+export function boundedRange(range, size) {
+  if (!range) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(String(range).trim());
+  if (!match || (!match[1] && !match[2])) return { invalid: true };
+
+  let start;
+  let end;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return { invalid: true };
+    const length = Math.min(size, suffixLength, MAX_RANGE);
+    start = size - length;
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : size - 1;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || end < start) return { invalid: true };
+    end = Math.min(end, start + MAX_RANGE - 1, size - 1);
+  }
+  return {
+    start,
+    end,
+    header: `bytes=${start}-${end}`,
+    contentRange: `bytes ${start}-${end}/${size}`,
+  };
 }
 
 export function createStorage(config, db) {
@@ -163,7 +182,17 @@ export function createStorage(config, db) {
     async sendChunk(upload, chunk, offset) {
       const end = offset + chunk.length;
       if (upload.node === 'local') {
-        await appendFile(localPath(upload.id), chunk);
+        const handle = await open(localPath(upload.id), 'r+');
+        try {
+          let written = 0;
+          while (written < chunk.length) {
+            const result = await handle.write(chunk, written, chunk.length - written, offset + written);
+            if (!result.bytesWritten) throw new Error('Local upload write made no progress.');
+            written += result.bytesWritten;
+          }
+        } finally {
+          await handle.close();
+        }
         return { done: end === upload.size, received: end, key: upload.id };
       }
       const response = await fetch(upload.session_uri, {
@@ -184,26 +213,47 @@ export function createStorage(config, db) {
     },
     async cancelUpload(upload) {
       if (upload.node === 'local') {
-        if (existsSync(localPath(upload.id))) await unlink(localPath(upload.id));
+        try { await unlink(localPath(upload.id)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       } else if (upload.session_uri) {
-        await fetch(upload.session_uri, { method: 'DELETE' }).catch(() => {});
+        const response = await fetch(upload.session_uri, { method: 'DELETE' });
+        if (!response.ok && response.status !== 404 && response.status !== 410) {
+          throw await googleError(response, 'The upload session could not be cancelled');
+        }
       }
     },
     async remove(stored) {
-      if (stored.node === 'local') return unlink(localPath(stored.key));
+      if (stored.node === 'local') {
+        try { await unlink(localPath(stored.key)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        return;
+      }
       const node = await db.get('SELECT * FROM drives WHERE id = ?', stored.node);
       if (!node) throw fail(503, 'The storage connection for this file is unavailable.');
-      await driveClient(node, config).files.delete({ fileId: stored.key, supportsAllDrives: true });
+      try {
+        await driveClient(node, config).files.delete({ fileId: stored.key, supportsAllDrives: true });
+      } catch (error) {
+        if (Number(error.code || error.status) !== 404) throw error;
+      }
     },
     async read(item, range) {
-      if (item.storage_node === 'local') return { local: localPath(item.storage_key) };
+      const bounded = boundedRange(range, item.size);
+      if (bounded?.invalid) return { status: 416, contentRange: `bytes */${item.size}` };
+      if (item.storage_node === 'local') {
+        const stream = bounded
+          ? createReadStream(localPath(item.storage_key), { start: bounded.start, end: bounded.end })
+          : createReadStream(localPath(item.storage_key));
+        return {
+          stream,
+          status: bounded ? 206 : 200,
+          contentLength: bounded ? bounded.end - bounded.start + 1 : item.size,
+          contentRange: bounded?.contentRange,
+        };
+      }
       const node = await db.get('SELECT * FROM drives WHERE id = ?', item.storage_node);
       if (!node) throw fail(503, 'The storage connection for this file is unavailable.');
       const headers = { Authorization: `Bearer ${await accessToken(node, config)}` };
-      const bounded = boundedRange(range, item.size);
-      if (bounded) headers.Range = bounded;
+      if (bounded) headers.Range = bounded.header;
       const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(item.storage_key)}?alt=media&supportsAllDrives=true`, { headers });
-      if (response.status === 416) throw fail(416, 'Requested range is not available.');
+      if (response.status === 416) return { status: 416, contentRange: `bytes */${item.size}` };
       if (!response.ok) throw await googleError(response, 'The file could not be read from Google Drive');
       return { stream: Readable.fromWeb(response.body), headers: response.headers, status: response.status };
     },

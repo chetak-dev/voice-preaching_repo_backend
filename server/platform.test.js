@@ -1,10 +1,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from './app.js';
 import { hashPassword } from './db.js';
+import { boundedRange } from './storage.js';
 
 const ORIGIN = 'http://localhost:5173';
 const TEST_PASSWORD = 'test-password';
@@ -22,6 +23,7 @@ before(async () => {
   await insert('test-admin', 'admin@example.test', 'Test Admin', 'site_admin', new Date().toISOString(), hashed);
   await insert('test-org-admin', 'orgadmin@example.test', 'Test Org Admin', 'org_admin', new Date().toISOString(), hashed);
   await insert('test-user', 'member@example.test', 'Test Member', 'user', new Date().toISOString(), hashed);
+  await insert('test-viewer', 'viewer@example.test', 'Test Viewer', 'user', new Date().toISOString(), hashed);
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -51,6 +53,16 @@ async function signIn(role, password = TEST_PASSWORD) {
     return { status: response.status, json: await response.json().catch(() => null) };
   };
 }
+
+
+test('media byte ranges are single, valid, and capped at 4 MiB', () => {
+  const oversized = boundedRange('bytes=0-99999999', 10 * 1024 * 1024);
+  assert.equal(oversized.header, 'bytes=0-4194303');
+  const suffix = boundedRange('bytes=-99999999', 10 * 1024 * 1024);
+  assert.equal(suffix.header, 'bytes=6291456-10485759');
+  assert.equal(boundedRange('bytes=0-1,3-4', 32).invalid, true);
+  assert.equal(boundedRange('bytes=32-', 32).invalid, true);
+});
 
 test('unauthenticated requests are rejected', async () => {
   const res = await fetch(`${base}/api/content`);
@@ -120,7 +132,11 @@ test('uploads are verified and stored pending approval', async () => {
   assert.equal(ok.json.status, 'pending');
   const queue = await admin('/api/content?scope=review');
   assert.ok(queue.json.items.some(item => item.id === ok.json.id && item.size === png.length));
-  assert.equal((await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png })).status, 404, 'finished uploads are closed');
+  const repeat = await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png });
+  assert.equal(repeat.status, 200, 'a retried final chunk returns the finished upload');
+  assert.equal(repeat.json.id, ok.json.id);
+  const mine = (await user('/api/content?scope=mine')).json.items.filter(item => item.id === ok.json.id);
+  assert.equal(mine.length, 1, 'retries do not duplicate content');
 
   const fake = await user('/api/uploads', { method: 'POST', body: { title: 'Not really a PNG', name: 'fake.png', mime: 'image/png', size: 5 } });
   assert.equal((await user(`/api/uploads/${fake.json.id}?offset=0`, { method: 'PUT', raw: Buffer.from('hello') })).status, 400);
@@ -146,12 +162,49 @@ test('large uploads arrive in ordered chunks and can be cancelled', async () => 
   assert.equal(outOfOrder.json.received, 256 * 1024);
   const last = await user(`/api/uploads/${id}?offset=${256 * 1024}`, { method: 'PUT', raw: file.subarray(256 * 1024) });
   assert.equal(last.status, 201);
+  const replay = await user(`/api/uploads/${id}?offset=${256 * 1024}`, { method: 'PUT', raw: file.subarray(256 * 1024) });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.json.id, last.json.id);
+  assert.deepEqual(readFileSync(path.join(dataDir, 'files', id)), file);
   const mine = await user('/api/content?scope=mine');
   assert.equal(mine.json.items.find(item => item.id === last.json.id).size, size);
 
   const cancelled = await user('/api/uploads', { method: 'POST', body: { title: 'Cancel me', name: 'c.pdf', mime: 'application/pdf', size } });
   assert.equal((await user(`/api/uploads/${cancelled.json.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await user(`/api/uploads/${cancelled.json.id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) })).status, 404);
+});
+
+
+test('concurrent chunks cannot advance or duplicate an upload, and finalization is idempotent', async () => {
+  const user = await signIn('user');
+  const size = 256 * 1024 + 10;
+  const file = Buffer.alloc(size, 0x61);
+  file.write('%PDF-1.7', 0, 'latin1');
+  const started = await user('/api/uploads', { method: 'POST', body: { title: 'Concurrent upload', name: 'concurrent.pdf', mime: 'application/pdf', size } });
+  const id = started.json.id;
+  const first = file.subarray(0, 256 * 1024);
+  const attempts = await Promise.all([
+    user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: first }),
+    user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: first }),
+  ]);
+  assert.deepEqual(attempts.map(result => result.status).sort(), [200, 409]);
+  const final = await user(`/api/uploads/${id}?offset=${256 * 1024}`, { method: 'PUT', raw: file.subarray(256 * 1024) });
+  assert.equal(final.status, 201);
+  const replay = await user(`/api/uploads/${id}?offset=${256 * 1024}`, { method: 'PUT', raw: file.subarray(256 * 1024) });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.json.id, final.json.id);
+  assert.deepEqual(readFileSync(path.join(dataDir, 'files', id)), file);
+});
+
+test('an active deletion claim blocks approval and duplicate deletion', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const { json: item } = await user('/api/content', { method: 'POST', body: { title: 'Deletion race', url: 'https://example.org/deletion-race' } });
+  await app.locals.db.run('UPDATE content SET deletion_token = ?, deletion_lock_expires = ? WHERE id = ?', 'test-lock', Date.now() + 60_000, item.id);
+  assert.equal((await admin(`/api/content/${item.id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 409);
+  assert.equal((await user(`/api/content/${item.id}`, { method: 'DELETE' })).status, 409);
+  await app.locals.db.run('UPDATE content SET deletion_lock_expires = ? WHERE id = ?', Date.now() - 1, item.id);
+  assert.equal((await user(`/api/content/${item.id}`, { method: 'DELETE' })).status, 200);
 });
 
 test('people can sign up, sign in and are rejected with bad credentials', async () => {
@@ -230,6 +283,46 @@ test('org admins can approve or reject content, and nothing else', async () => {
   assert.equal((await orgAdmin('/api/audit')).status, 403);
   assert.equal((await orgAdmin('/api/users/test-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 403);
   assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE' })).status, 200);
+});
+
+test('approved content visibility defaults to public and private items stay out of community lists and file routes', async () => {
+  const owner = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const orgAdmin = await signIn('org_admin');
+  const admin = await signIn('site_admin');
+  const item = (await owner('/api/content', { method: 'POST', body: { title: 'Visibility test', url: 'https://example.org/visibility-test' } })).json;
+  assert.equal((await admin(`/api/content/${item.id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 200);
+  assert.ok((await viewer('/api/content?scope=library')).json.items.some(row => row.id === item.id));
+  assert.equal((await owner(`/api/content/${item.id}/visibility`, { method: 'PATCH', body: { visibility: 'private' } })).json.visibility, 'private');
+  assert.ok((await owner('/api/content?scope=mine')).json.items.some(row => row.id === item.id && row.visibility === 'private'));
+  assert.ok(!(await viewer('/api/content?scope=library')).json.items.some(row => row.id === item.id));
+  assert.equal((await viewer(`/api/content/${item.id}/file`)).status, 404);
+  assert.equal((await orgAdmin(`/api/content/${item.id}/visibility`, { method: 'PATCH', body: { visibility: 'public' } })).status, 403);
+  assert.equal((await viewer(`/api/content/${item.id}/visibility`, { method: 'PATCH', body: { visibility: 'public' } })).status, 404);
+  assert.equal((await owner(`/api/content/${item.id}/visibility`, { method: 'PATCH', body: { visibility: 'unlisted' } })).status, 400);
+  assert.equal((await admin(`/api/content/${item.id}/visibility`, { method: 'PATCH', body: { visibility: 'public' } })).status, 200);
+  assert.ok((await viewer('/api/content?scope=library')).json.items.some(row => row.id === item.id));
+});
+
+test('bulk review is bounded, skips ineligible items, and keeps org admins from approving their own submissions', async () => {
+  const user = await signIn('user');
+  const orgAdmin = await signIn('org_admin');
+  const siteAdmin = await signIn('site_admin');
+  const first = (await user('/api/content', { method: 'POST', body: { title: 'Bulk one', url: 'https://example.org/bulk-one' } })).json;
+  const second = (await user('/api/content', { method: 'POST', body: { title: 'Bulk two', url: 'https://example.org/bulk-two' } })).json;
+  assert.equal((await user('/api/review/bulk-approve', { method: 'POST', body: { ids: [first.id] } })).status, 403);
+  const approved = await orgAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [first.id, second.id] } });
+  assert.equal(approved.status, 200);
+  assert.deepEqual(approved.json, { approved: 2, skipped: 0 });
+  assert.equal((await user('/api/content?scope=library')).json.items.filter(row => [first.id, second.id].includes(row.id)).length, 2);
+  const own = (await orgAdmin('/api/content', { method: 'POST', body: { title: 'Org admin own item', url: 'https://example.org/org-own' } })).json;
+  const skipped = await orgAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [own.id] } });
+  assert.equal(skipped.status, 200);
+  assert.deepEqual(skipped.json, { approved: 0, skipped: 1 });
+  assert.ok((await orgAdmin('/api/content?scope=review')).json.items.some(row => row.id === own.id));
+  assert.equal((await siteAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: Array.from({ length: 26 }, (_, index) => `bad-${index}`) } })).status, 400);
+  assert.equal((await siteAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [first.id, first.id] } })).status, 400);
+  assert.equal((await siteAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [own.id] } })).json.approved, 1);
 });
 
 test('storage management is restricted to site admins', async () => {

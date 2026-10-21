@@ -282,7 +282,8 @@ export function createApp(overrides = {}) {
     FROM content c JOIN users u ON u.id = c.uploader_id
     LEFT JOIN users r ON r.id = c.reviewed_by`;
   function visible(item, user) {
-    return item.status === 'approved' || isReviewer(user) || item.uploader_id === user.id;
+    const privateAccess = item.visibility !== 'private' || item.uploader_id === user.id || isReviewer(user);
+    return privateAccess && (item.status === 'approved' || isReviewer(user) || item.uploader_id === user.id);
   }
   async function getContent(req) {
     const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, req.params.id);
@@ -295,8 +296,8 @@ export function createApp(overrides = {}) {
     if (!['library', 'mine', 'review', 'saved'].includes(scope)) throw fail(400, 'Unknown content view.');
     if (scope === 'review' && !isReviewer(req.user)) throw fail(403, 'Only administrators can review submissions.');
     const clauses = {
-      library: "c.status = 'approved'", mine: 'c.uploader_id = ?',
-      review: "c.status = 'pending'", saved: "c.status = 'approved' AND EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?)",
+      library: "c.status = 'approved' AND c.visibility = 'public'", mine: 'c.uploader_id = ?',
+      review: "c.status = 'pending'", saved: "c.status = 'approved' AND c.visibility = 'public' AND EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?)",
     };
     const params = [req.user.id];
     if (scope === 'mine' || scope === 'saved') params.push(req.user.id);
@@ -304,7 +305,7 @@ export function createApp(overrides = {}) {
     res.json({ items: rows.map(({ storage_key, ...item }) => item) });
   }));
   app.get('/api/overview', h(async (req, res) => {
-    const approved = await count("SELECT count(*) AS n FROM content WHERE status = 'approved'");
+    const approved = await count("SELECT count(*) AS n FROM content WHERE status = 'approved' AND visibility = 'public'");
     const contributions = await count('SELECT count(*) AS n FROM content WHERE uploader_id = ?', req.user.id);
     const pending = isReviewer(req.user)
       ? await count("SELECT count(*) AS n FROM content WHERE status = 'pending'")
@@ -355,12 +356,34 @@ export function createApp(overrides = {}) {
   }));
 
   // Chunked uploads keep every request under serverless body limits and stream straight into Google Drive.
-  async function discard(upload) {
-    try { await storage.cancelUpload(upload); } catch (error) { console.error('Upload cleanup failed:', upload.id, error.message); }
-    await db.run('DELETE FROM uploads WHERE id = ?', upload.id);
+  async function discard(upload, heldToken) {
+    const now = Date.now();
+    const token = heldToken || randomUUID();
+    const claim = await db.run(`UPDATE uploads SET chunk_lock = ?, chunk_lock_expires = ?
+      WHERE id = ? AND (chunk_lock IS NULL OR chunk_lock_expires IS NULL OR chunk_lock_expires < ? OR chunk_lock = ?)`,
+    token, now + 5 * 60_000, upload.id, now, heldToken || null);
+    if (!claim.changes) throw fail(409, 'This upload is currently processing. Try again shortly.');
+    try {
+      if (upload.completed_key) await storage.remove({ node: upload.node, key: upload.completed_key });
+      else await storage.cancelUpload(upload);
+    } catch (error) {
+      await db.run('UPDATE uploads SET chunk_lock = NULL, chunk_lock_expires = NULL WHERE id = ? AND chunk_lock = ?', upload.id, token);
+      console.error('Upload cleanup failed; upload record retained for retry:', upload.id, error.message);
+      throw fail(503, 'Upload storage could not be cleaned up. Please retry.');
+    }
+    await db.run('DELETE FROM uploads WHERE id = ? AND chunk_lock = ?', upload.id, token);
   }
   app.post('/api/uploads', h(async (req, res) => {
-    for (const stale of await db.all('SELECT * FROM uploads WHERE created_at < ?', Date.now() - UPLOAD_TTL_MS)) await discard(stale);
+    const now = Date.now();
+    for (const stale of await db.all('SELECT * FROM uploads WHERE created_at < ? AND (chunk_lock IS NULL OR chunk_lock_expires IS NULL OR chunk_lock_expires < ?)', Date.now() - UPLOAD_TTL_MS, now)) {
+      try {
+        const submitted = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ?', stale.id, stale.user_id);
+        if (submitted) await db.run('DELETE FROM uploads WHERE id = ? AND (chunk_lock IS NULL OR chunk_lock_expires < ?)', stale.id, Date.now());
+        else await discard(stale);
+      } catch (error) {
+        console.warn('Stale upload cleanup deferred:', stale.id, error.message);
+      }
+    }
     const title = text(req.body.title, 'Title');
     const description = text(req.body.description || '', 'Description', 2000, 0);
     const name = text(req.body.name, 'File name', 255);
@@ -383,36 +406,80 @@ export function createApp(overrides = {}) {
     return upload;
   };
   app.put('/api/uploads/:id', express.raw({ type: 'application/octet-stream', limit: CHUNK_SIZE + 1024 }), h(async (req, res) => {
+    const completed = await db.get('SELECT id, status FROM content WHERE id = ? AND uploader_id = ? AND storage_key IS NOT NULL', req.params.id, req.user.id);
+    if (completed) return res.status(200).json({ done: true, id: completed.id, status: completed.status, message: 'Upload was already submitted.' });
+
     const upload = await ownUpload(req);
     const offset = Number(req.query.offset);
     const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    if (offset !== upload.received) return res.status(409).json({ error: 'Upload is out of sync; resuming.', received: upload.received });
-    const end = offset + chunk.length;
-    if (!chunk.length || end > upload.size) throw fail(400, 'Invalid upload chunk.');
-    if (end < upload.size && chunk.length % (256 * 1024) !== 0) throw fail(400, 'Upload chunks must be multiples of 256 KB.');
-    if (offset === 0) {
-      try { verifySignature(chunk, upload.mime, upload.size); } catch (error) { await discard(upload); throw error; }
+    if (!upload.completed_key && offset !== upload.received) {
+      return res.status(409).json({ error: 'Upload is out of sync; resuming.', received: upload.received });
     }
-    const result = await storage.sendChunk(upload, chunk, offset);
-    if (!result.done) {
-      await db.run('UPDATE uploads SET received = ? WHERE id = ? AND received = ?', result.received, upload.id, offset);
-      return res.json({ done: false, received: result.received });
+    if (!upload.completed_key) {
+      const end = offset + chunk.length;
+      if (!chunk.length || end > upload.size) throw fail(400, 'Invalid upload chunk.');
+      if (end < upload.size && chunk.length % (256 * 1024) !== 0) throw fail(400, 'Upload chunks must be multiples of 256 KB.');
     }
-    const id = randomUUID();
+
+    const token = randomUUID();
+    const now = Date.now();
+    const claim = await db.run(`UPDATE uploads SET chunk_lock = ?, chunk_lock_expires = ?
+      WHERE id = ? AND user_id = ? AND received = ?
+      AND (chunk_lock IS NULL OR chunk_lock_expires IS NULL OR chunk_lock_expires < ?)`,
+    token, now + 5 * 60_000, upload.id, req.user.id, upload.received, now);
+    if (!claim.changes) {
+      const latest = await db.get('SELECT received FROM uploads WHERE id = ? AND user_id = ?', upload.id, req.user.id);
+      if (!latest) throw fail(404, 'Upload not found. It may have expired; please start again.');
+      return res.status(409).json({ error: 'This upload is already processing or out of sync; resuming.', received: latest.received });
+    }
+
+    let locked = true;
     try {
-      await db.run(`INSERT INTO content
-        (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
-      upload.original_name, upload.size, upload.node, result.key, req.user.id, new Date().toISOString());
-    } catch (error) {
-      try { await storage.remove({ node: upload.node, key: result.key }); } catch (cleanupError) {
-        console.error('Storage rollback failed; manual cleanup required:', upload.node, result.key, cleanupError);
+      if (!upload.completed_key && offset === 0) {
+        try { verifySignature(chunk, upload.mime, upload.size); }
+        catch (error) { await discard(upload, token); locked = false; throw error; }
       }
-      throw error;
+
+      let completedKey = upload.completed_key;
+      if (!completedKey) {
+        const result = await storage.sendChunk(upload, chunk, offset);
+        if (!result.done) {
+          if (!Number.isInteger(result.received) || result.received < 0 || result.received > upload.size) throw fail(502, 'Storage returned an invalid upload offset.');
+          const saved = await db.run(`UPDATE uploads SET received = ?, chunk_lock = NULL, chunk_lock_expires = NULL
+            WHERE id = ? AND chunk_lock = ?`, result.received, upload.id, token);
+          locked = false;
+          if (!saved.changes) throw fail(409, 'The upload lease expired; please retry from the latest offset.');
+          return res.json({ done: false, received: result.received });
+        }
+        if (!result.key) throw fail(502, 'Storage completed the upload without returning a file key.');
+        completedKey = result.key;
+        const saved = await db.run('UPDATE uploads SET completed_key = ? WHERE id = ? AND chunk_lock = ?', completedKey, upload.id, token);
+        if (!saved.changes) throw fail(409, 'The upload lease expired; please retry.');
+      }
+
+      const id = upload.id;
+      let existing = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ?', id, req.user.id);
+      let created = false;
+      if (!existing) {
+        try {
+          await db.run(`INSERT INTO content
+            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
+          upload.original_name, upload.size, upload.node, completedKey, req.user.id, new Date().toISOString());
+          created = true;
+        } catch (error) {
+          existing = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ?', id, req.user.id);
+          if (!existing) throw error;
+        }
+      }
+      await db.run('DELETE FROM uploads WHERE id = ? AND chunk_lock = ?', upload.id, token);
+      locked = false;
+      if (created) await audit(db, req.user.id, 'Submitted content', upload.title);
+      const status = created ? 201 : 200;
+      return res.status(status).json({ done: true, id, status: 'pending', message: 'Submitted for admin approval.' });
+    } finally {
+      if (locked) await db.run('UPDATE uploads SET chunk_lock = NULL, chunk_lock_expires = NULL WHERE id = ? AND chunk_lock = ?', upload.id, token);
     }
-    await db.run('DELETE FROM uploads WHERE id = ?', upload.id);
-    await audit(db, req.user.id, 'Submitted content', upload.title);
-    res.status(201).json({ done: true, id, status: 'pending', message: 'Submitted for admin approval.' });
   }));
   app.delete('/api/uploads/:id', h(async (req, res) => {
     await discard(await ownUpload(req));
@@ -426,14 +493,50 @@ export function createApp(overrides = {}) {
     if (item.status !== 'pending') throw fail(409, 'This submission has already been reviewed.');
     const note = text(req.body.note || '', 'Review note', 1000, req.body.decision === 'rejected' ? 5 : 0);
     const result = await db.run(`UPDATE content SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = ?
-      WHERE id = ? AND status = 'pending'`, req.body.decision, req.user.id, note, new Date().toISOString(), item.id);
+      WHERE id = ? AND status = 'pending'
+        AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
+    req.body.decision, req.user.id, note, new Date().toISOString(), item.id, Date.now());
     if (!result.changes) throw fail(409, 'Another administrator has already reviewed this submission.');
     await audit(db, req.user.id, req.body.decision === 'approved' ? 'Approved content' : 'Rejected content', item.title);
     res.json({ ok: true });
   }));
+  app.post('/api/review/bulk-approve', reviewers, h(async (req, res) => {
+    const ids = req.body.ids;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 25
+      || ids.some(id => typeof id !== 'string' || !id.trim() || id.length > 80)
+      || new Set(ids).size !== ids.length) throw fail(400, 'Select between 1 and 25 unique submission IDs.');
+    let approved = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, id);
+      if (!item || item.status !== 'pending' || (req.user.role === 'org_admin' && item.uploader_id === req.user.id)) { skipped += 1; continue; }
+      const result = await db.run(`UPDATE content SET status = 'approved', reviewed_by = ?, review_note = '', reviewed_at = ?
+        WHERE id = ? AND status = 'pending'
+          AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
+      req.user.id, new Date().toISOString(), item.id, Date.now());
+      if (!result.changes) { skipped += 1; continue; }
+      await audit(db, req.user.id, 'Approved content', item.title);
+      approved += 1;
+    }
+    res.json({ approved, skipped });
+  }));
+
+  app.patch('/api/content/:id/visibility', h(async (req, res) => {
+    const { item } = await getContent(req);
+    if (req.user.role !== 'site_admin' && item.uploader_id !== req.user.id) throw fail(403, 'Only the contributor or a site admin can change visibility.');
+    if (item.status !== 'approved') throw fail(409, 'Only approved content can change visibility.');
+    const visibility = req.body.visibility;
+    if (!['public', 'private'].includes(visibility)) throw fail(400, 'Choose public or private visibility.');
+    const changed = await db.run(`UPDATE content SET visibility = ? WHERE id = ? AND status = 'approved'
+      AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`, visibility, item.id, Date.now());
+    if (!changed.changes) throw fail(409, 'This content is being changed or is no longer available.');
+    await audit(db, req.user.id, visibility === 'public' ? 'Made content public' : 'Made content private', item.title);
+    res.json({ ok: true, visibility });
+  }));
+
   app.post('/api/content/:id/bookmark', h(async (req, res) => {
     const { item } = await getContent(req);
-    if (item.status !== 'approved') throw fail(400, 'Only approved content can be saved.');
+    if (item.status !== 'approved' || item.visibility !== 'public') throw fail(400, 'Only public, approved content can be saved.');
     const current = await db.get('SELECT 1 AS found FROM bookmarks WHERE user_id = ? AND content_id = ?', req.user.id, item.id);
     if (current) await db.run('DELETE FROM bookmarks WHERE user_id = ? AND content_id = ?', req.user.id, item.id);
     else await db.run('INSERT INTO bookmarks VALUES (?, ?)', req.user.id, item.id);
@@ -441,15 +544,30 @@ export function createApp(overrides = {}) {
   }));
   app.delete('/api/content/:id', h(async (req, res) => {
     const { item } = await getContent(req);
+    const isAdmin = req.user.role === 'site_admin';
     const owner = item.uploader_id === req.user.id && item.status !== 'approved';
-    if (req.user.role !== 'site_admin' && !owner) throw fail(403, 'Only site admins can remove published content.');
+    if (!isAdmin && !owner) throw fail(403, 'Only site admins can remove published content.');
+
+    const token = randomUUID();
+    const now = Date.now();
+    const claim = await db.run(`UPDATE content SET deletion_token = ?, deletion_lock_expires = ?
+      WHERE id = ? AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)
+      AND (? = 1 OR (uploader_id = ? AND status != 'approved'))`,
+    token, now + 5 * 60_000, item.id, now, isAdmin ? 1 : 0, req.user.id);
+    if (!claim.changes) throw fail(409, 'This content is already being removed or its status changed. Refresh and try again.');
+
     if (item.storage_key) {
-      try { await storage.remove({ node: item.storage_node, key: item.storage_key }); } catch (error) {
-        console.error('Stored file could not be removed; manual cleanup required:', item.storage_node, item.storage_key, error.message);
+      try {
+        await storage.remove({ node: item.storage_node, key: item.storage_key });
+      } catch (error) {
+        await db.run('UPDATE content SET deletion_token = NULL, deletion_lock_expires = NULL WHERE id = ? AND deletion_token = ?', item.id, token);
+        console.error('Stored file could not be removed; content record retained for retry:', item.storage_node, item.storage_key, error.message);
+        throw fail(503, 'The stored file could not be removed, so the content was kept. Please retry later.');
       }
     }
     await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
-    await db.run('DELETE FROM content WHERE id = ?', item.id);
+    const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);
+    if (!deleted.changes) throw fail(409, 'The content changed while it was being removed. Refresh and try again.');
     await audit(db, req.user.id, 'Deleted content', item.title);
     res.json({ ok: true });
   }));
@@ -461,12 +579,12 @@ export function createApp(overrides = {}) {
     res.set('Content-Disposition', `${req.query.inline === '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${name}`);
     res.set('X-Frame-Options', 'SAMEORIGIN');
     res.type(item.mime);
-    if (file.local) return res.sendFile(file.local);
-    const length = file.headers.get('content-length');
-    const range = file.headers.get('content-range');
-    if (length) res.set('Content-Length', length);
-    if (range) res.set('Content-Range', range);
     res.set('Accept-Ranges', 'bytes');
+    const length = file.contentLength ?? file.headers?.get('content-length');
+    const range = file.contentRange ?? file.headers?.get('content-range');
+    if (length != null) res.set('Content-Length', String(length));
+    if (range) res.set('Content-Range', range);
+    if (file.status === 416) return res.status(416).end();
     res.status(file.status);
     await pipeline(file.stream, res);
   }));

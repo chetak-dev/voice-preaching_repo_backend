@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Bookmark, BookmarkCheck, Download, ExternalLink, Eye } from 'lucide-react';
 import { fileUrl } from '../api.js';
+import { useMediaPlayer } from './MediaPlayer.jsx';
 import { Avatar, Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -57,40 +58,49 @@ export function ContentCard({ item, onPreview, onBookmark, showStatus, footer })
   );
 }
 
-export function PreviewModal({ item, onClose, actions }) {
+export function PreviewModal({ item, onClose, actions, user, onVisibilityChange }) {
+  const [copied, setCopied] = useState(false);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const { openPlayer } = useMediaPlayer();
   if (!item) return null;
   const meta = TYPE_META[item.type] || TYPE_META.link;
   const src = fileUrl(item.id, true);
+  const canManageVisibility = item.status === 'approved' && user && (user.role === 'site_admin' || item.uploader_id === user.id);
+  const isMedia = item.type === 'audio' || item.type === 'video';
   let body;
   if (item.type === 'image') body = <img src={src} alt={item.title} className="mx-auto max-h-[60vh] rounded-lg object-contain" />;
-  else if (item.type === 'video') body = <video src={src} controls className="max-h-[60vh] w-full rounded-lg bg-black" />;
-  else if (item.type === 'audio') body = <div className="rounded-lg bg-slate-50 p-6"><audio src={src} controls className="w-full" /></div>;
+  else if (isMedia) body = <div className="rounded-lg bg-slate-50 p-6 text-center"><p className="text-sm text-slate-600">Open this {item.type} in the persistent player to keep listening while you browse.</p>
+    <Button className="mt-4" onClick={() => openPlayer(item)}>{item.type === 'video' ? 'Play video' : 'Listen now'}</Button></div>;
   else if (item.type === 'doc') body = <iframe title={item.title} src={src} className="h-[60vh] w-full rounded-lg border border-slate-200" />;
-  else {
-    body = (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">External link</p>
-        <p className="mt-1 break-all text-sm text-slate-800">{item.url}</p>
-      </div>
-    );
+  else body = <div className="rounded-lg border border-slate-200 bg-slate-50 p-5"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">External link</p>
+    <p className="mt-1 break-all text-sm text-slate-800">{item.url}</p></div>;
+  async function copyPublicLink() {
+    const url = new URL('/', window.location.origin); url.searchParams.set('content', item.id); url.hash = '/library';
+    try { await navigator.clipboard.writeText(url.toString()); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
+    catch { window.prompt('Copy this public link', url.toString()); }
+  }
+  async function toggleVisibility() {
+    if (!onVisibilityChange) return;
+    setVisibilityBusy(true);
+    try { await onVisibilityChange(item, item.visibility === 'private' ? 'public' : 'private'); }
+    finally { setVisibilityBusy(false); }
   }
   return (
-    <Modal open onClose={onClose} title={item.title} size="lg"
-      footer={(
-        <>
-          {actions}
-          {item.type === 'link'
-            ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
-            : <Button href={fileUrl(item.id)} icon={Download}>Download</Button>}
-        </>
-      )}>
+    <Modal open onClose={onClose} title={item.title} size="lg" footer={(
+      <>
+        {item.status === 'approved' && item.visibility === 'public' && <Button variant="secondary" onClick={copyPublicLink}>{copied ? 'Link copied' : 'Copy public link'}</Button>}
+        {canManageVisibility && <Button variant="secondary" loading={visibilityBusy} onClick={toggleVisibility}>Make {item.visibility === 'private' ? 'public' : 'private'}</Button>}
+        {actions}
+        {item.type === 'link' ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
+          : <Button href={fileUrl(item.id)} icon={Download}>Download</Button>}
+      </>
+    )}>
       {body}
       <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
         <div><dt className="text-slate-500">Type</dt><dd className="font-medium text-slate-900">{meta.label}</dd></div>
         <div><dt className="text-slate-500">Submitted by</dt><dd className="truncate font-medium text-slate-900">{item.uploader}</dd></div>
         <div><dt className="text-slate-500">Submitted</dt><dd className="font-medium text-slate-900">{new Date(item.created_at).toLocaleDateString()}</dd></div>
-        <div><dt className="text-slate-500">{item.type === 'link' ? 'Website' : 'Size'}</dt>
-          <dd className="truncate font-medium text-slate-900">{item.type === 'link' ? hostOf(item.url) : formatBytes(item.size)}</dd></div>
+        <div><dt className="text-slate-500">{item.type === 'link' ? 'Website' : 'Size'}</dt><dd className="truncate font-medium text-slate-900">{item.type === 'link' ? hostOf(item.url) : formatBytes(item.size)}</dd></div>
       </dl>
       {item.description && <p className="mt-4 whitespace-pre-line text-sm text-slate-600">{item.description}</p>}
     </Modal>

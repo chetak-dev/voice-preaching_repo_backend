@@ -3,7 +3,8 @@ import {
   Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, Plus, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
-import { Avatar, Badge, Logo, ROLE_META, Spinner, ToastProvider, cx, useToast } from './components/ui.jsx';
+import { Avatar, Badge, Button, Logo, Modal, ROLE_META, Spinner, ToastProvider, cx, useToast } from './components/ui.jsx';
+import { PersistentMediaPlayer, useMediaPlayer } from './components/MediaPlayer.jsx';
 import Activity from './views/Activity.jsx';
 import Library from './views/Library.jsx';
 import Login from './views/Login.jsx';
@@ -43,9 +44,20 @@ function CountBadge({ value, className }) {
 function Shell({ user, config, onSignOut }) {
   const toast = useToast();
   const [view, setView] = useState(currentHash);
+  const [sharedContentId] = useState(() => new URLSearchParams(window.location.search).get('content'));
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pending, setPending] = useState(0);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const askSignOut = () => { setSheetOpen(false); setConfirmSignOut(true); };
+  const closeSignOut = useCallback(() => setConfirmSignOut(false), []);
+  async function doSignOut() {
+    setSigningOut(true);
+    try { await onSignOut(); } finally { setSigningOut(false); }
+  }
   const isReviewer = allowed('review', user.role);
+  const { closePlayer } = useMediaPlayer();
+  useEffect(() => () => closePlayer(), [closePlayer]);
 
   const navigate = useCallback(id => { window.location.hash = `/${id}`; setSheetOpen(false); window.scrollTo(0, 0); }, []);
   useEffect(() => {
@@ -74,7 +86,7 @@ function Shell({ user, config, onSignOut }) {
   }, [sheetOpen]);
 
   const active = ITEMS[view] && allowed(view, user.role) ? view : 'library';
-  const props = { user, config, navigate, onChanged: refreshPending };
+  const props = { user, config, navigate, onChanged: refreshPending, sharedContentId };
   const page = {
     library: <Library key="library" scope="library" {...props} />,
     saved: <Library key="saved" scope="saved" {...props} />,
@@ -92,6 +104,7 @@ function Shell({ user, config, onSignOut }) {
 
   return (
     <div className="min-h-screen">
+      <PersistentMediaPlayer />
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-72 overflow-hidden bg-slate-950 text-white lg:flex lg:flex-col">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-indigo-950 via-slate-950 to-slate-950" />
@@ -135,7 +148,7 @@ function Shell({ user, config, onSignOut }) {
               <p className="truncate text-sm font-semibold">{user.name}</p>
               <p className="truncate text-xs text-white/50">{role.label}</p>
             </div>
-            <button type="button" onClick={onSignOut} className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Sign out" title="Sign out">
+            <button type="button" onClick={askSignOut} className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Sign out" title="Sign out">
               <LogOut className="h-4 w-4" />
             </button>
           </div>
@@ -220,13 +233,23 @@ function Shell({ user, config, onSignOut }) {
               </div>
             )}
             <div className="border-t border-slate-100 p-3">
-              <button type="button" onClick={onSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50">
+              <button type="button" onClick={askSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50">
                 <LogOut className="h-5 w-5" /> Sign out
               </button>
             </div>
           </div>
         </div>
       )}
+
+      <Modal open={confirmSignOut} onClose={closeSignOut} size="sm" title="Sign out?"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={closeSignOut} disabled={signingOut}>Cancel</Button>
+            <Button variant="danger" icon={LogOut} loading={signingOut} onClick={doSignOut}>Sign out</Button>
+          </>
+        )}>
+        <p className="text-sm text-slate-600">You are signed in as <span className="font-medium text-slate-900">{user.email}</span>. You will need to sign in again to use VOICE.</p>
+      </Modal>
     </div>
   );
 }

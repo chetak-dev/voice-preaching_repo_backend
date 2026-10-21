@@ -1,10 +1,20 @@
 import React, { useMemo, useState } from 'react';
-import { Bookmark, Clock, FolderOpen, LayoutGrid, List, Search, Trash2, UploadCloud, Users } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Clock, FolderOpen, LayoutGrid, List, Search, Trash2, UploadCloud, Users } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentCard, ContentThumb, PreviewModal } from '../components/Content.jsx';
+import { useMediaPlayer } from '../components/MediaPlayer.jsx';
+import { useEffect, useRef } from 'react';
 import {
   Badge, Button, EmptyState, ErrorBanner, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useAsync, useToast,
 } from '../components/ui.jsx';
+
+function formatResumeTime(value) {
+  const seconds = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}` : `${minutes}:${String(rest).padStart(2, '0')}`;
+}
 
 const COPY = {
   library: { title: 'Library', description: 'Approved content shared with the whole community.' },
@@ -24,7 +34,7 @@ function Stat({ icon: Icon, label, value, tone }) {
   );
 }
 
-export default function Library({ scope, user, navigate, onChanged }) {
+export default function Library({scope, user, navigate, onChanged, sharedContentId }) {
   const toast = useToast();
   const { data, loading, error, reload } = useAsync(() => api(`/content?scope=${scope}`), [scope]);
   const overview = useAsync(() => (scope === 'library' ? api('/overview') : Promise.resolve(null)), [scope]);
@@ -36,9 +46,22 @@ export default function Library({ scope, user, navigate, onChanged }) {
   const [overrides, setOverrides] = useState({});
 
   const items = useMemo(() => (data?.items || []).map(item => ({ ...item, ...overrides[item.id] })), [data, overrides]);
+  const { lastContentId, progressById, openPlayer } = useMediaPlayer();
+  const sharedOpenRef = useRef(null);
+  const continueItem = scope === 'library' ? items.find(item => item.id === lastContentId && ['audio', 'video'].includes(item.type) && item.visibility !== 'private') : null;
+  const continueProgress = continueItem ? progressById[continueItem.id] : null;
+
+  useEffect(() => {
+    if (!sharedContentId || scope !== 'library' || !data || sharedOpenRef.current === sharedContentId) return;
+    sharedOpenRef.current = sharedContentId;
+    const shared = items.find(item => item.id === sharedContentId && item.visibility !== 'private');
+    if (shared) setPreview(shared);
+    else toast('This shared item is unavailable or private.', 'error');
+  }, [sharedContentId, scope, data, items, toast]);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return items.filter(item => (scope !== 'saved' || item.bookmarked)
+      && (scope !== 'library' || item.visibility !== 'private')
       && (type === 'all' || item.type === type)
       && (status === 'all' || item.status === status)
       && (!q || [item.title, item.description, item.uploader].some(value => value?.toLowerCase().includes(q))));
@@ -50,6 +73,15 @@ export default function Library({ scope, user, navigate, onChanged }) {
       const { bookmarked } = await api(`/content/${item.id}/bookmark`, { method: 'POST' });
       setOverrides(current => ({ ...current, [item.id]: { bookmarked } }));
       toast(bookmarked ? 'Saved to your collection.' : 'Removed from saved.');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function changeVisibility(item, visibility) {
+    try {
+      const result = await api(`/content/${item.id}/visibility`, { method: 'PATCH', body: { visibility } });
+      setOverrides(current => ({ ...current, [item.id]: { ...current[item.id], visibility: result.visibility } }));
+      setPreview(current => current?.id === item.id ? { ...current, visibility: result.visibility } : current);
+      toast(result.visibility === 'public' ? 'Content is now public.' : 'Content is now private.');
     } catch (err) { toast(err.message, 'error'); }
   }
 
@@ -93,6 +125,17 @@ export default function Library({ scope, user, navigate, onChanged }) {
       ) : (
         <PageHeader title={COPY[scope].title} description={COPY[scope].description}
           actions={<Button icon={UploadCloud} onClick={() => navigate('upload')} className="hidden lg:inline-flex">Contribute</Button>} />
+      )}
+
+      {continueItem && (
+        <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-brand-100 bg-brand-50 p-4 sm:flex-row sm:items-center sm:justify-between" aria-label="Continue listening">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Continue listening</p>
+            <p className="mt-1 truncate text-sm font-semibold text-slate-900">{continueItem.title}</p>
+            <p className="text-xs text-slate-600">Resume at {formatResumeTime(continueProgress?.currentTime || 0)}</p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => openPlayer(continueItem)}>Continue playing</Button>
+        </section>
       )}
 
       <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center">
@@ -165,7 +208,17 @@ export default function Library({ scope, user, navigate, onChanged }) {
                 <div className="min-w-0 flex-1">
                   <button type="button" onClick={() => setPreview(item)} className="block truncate text-left text-sm font-medium text-slate-900 hover:text-brand-700">{item.title}</button>
                   <p className="truncate text-xs text-slate-500">{item.uploader} · {timeAgo(item.created_at)}</p>
+                  {scope === 'mine' && item.status === 'rejected' && item.review_note && (
+                    <p className="mt-1 line-clamp-2 text-xs text-rose-700"><span className="font-medium">Reviewer note:</span> {item.review_note}</p>
+                  )}
                 </div>
+                {item.status === 'approved' && (
+                  <button type="button" onClick={() => toggleBookmark(item)}
+                    aria-label={item.bookmarked ? 'Remove from saved' : 'Save'}
+                    className={cx('shrink-0 rounded-md p-2 transition', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
+                    {item.bookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+                  </button>
+                )}
                 <Badge tone={meta.tone} icon={meta.icon} className="hidden sm:inline-flex">{meta.label}</Badge>
                 {scope === 'mine' && <Badge tone={STATUS_META[item.status].tone}>{STATUS_META[item.status].label}</Badge>}
                 {scope === 'mine' && canDelete(item) && (
@@ -177,7 +230,7 @@ export default function Library({ scope, user, navigate, onChanged }) {
         </div>
       )}
 
-      <PreviewModal item={preview} onClose={() => setPreview(null)}
+      <PreviewModal item={preview} user={user} onVisibilityChange={changeVisibility} onClose={() => setPreview(null)}
         actions={preview && user.role === 'site_admin' && scope === 'library' && (
           <Button variant="secondary" icon={Trash2} onClick={() => remove(preview)} className="text-rose-600">Remove</Button>
         )} />

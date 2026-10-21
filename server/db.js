@@ -48,6 +48,7 @@ const SCHEMA = `
     type TEXT NOT NULL, mime TEXT, original_name TEXT, size INTEGER NOT NULL DEFAULT 0,
     storage_node TEXT, storage_key TEXT, url TEXT,
     status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
+    visibility TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public','private')),
     uploader_id TEXT NOT NULL REFERENCES users(id),
     reviewed_by TEXT REFERENCES users(id), review_note TEXT, reviewed_at TEXT,
     created_at TEXT NOT NULL
@@ -117,6 +118,16 @@ export function openDatabase({ url, authToken, directory }) {
       ['quota_usage', 'INTEGER'],
       ['quota_limit', 'INTEGER'],
       ['quota_checked_at', 'INTEGER'],
+    ]);
+    await addColumns('content', [
+      ['deletion_token', 'TEXT'],
+      ['deletion_lock_expires', 'INTEGER'],
+      ['visibility', "TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public','private'))"],
+    ]);
+    await addColumns('uploads', [
+      ['chunk_lock', 'TEXT'],
+      ['chunk_lock_expires', 'INTEGER'],
+      ['completed_key', 'TEXT'],
     ]);
   })();
   return db;
