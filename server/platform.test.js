@@ -82,7 +82,10 @@ test('submissions from any role require admin approval', async () => {
   const created = await user('/api/content', { method: 'POST', body: { title: 'Weekly class notes', url: 'https://example.org/notes' } });
   assert.equal(created.status, 201);
   assert.equal(created.json.status, 'pending');
-
+  assert.equal((await user('/api/content', { method: 'POST', body: { title: 'Plain http link', url: 'http://example.org/http' } })).status, 201);
+  for (const url of ['javascript:alert(1)', 'ftp://example.org/x', 'https://u:p@example.org/']) {
+    assert.equal((await user('/api/content', { method: 'POST', body: { title: 'Bad link', url } })).status, 400, url);
+  }
   const library = await user('/api/content?scope=library');
   assert.ok(!library.json.items.some(item => item.id === created.json.id), 'pending content must not appear in the library');
   const mine = await user('/api/content?scope=mine');
@@ -156,7 +159,8 @@ test('uploads are verified and stored pending approval', async () => {
   await served.arrayBuffer();
   const unknown = await user('/api/uploads', { method: 'POST', body: { title: 'Program', name: 'a.bin', mime: '', size: 10 } });
   assert.equal(unknown.status, 201, 'files without a reported type are accepted');
-  assert.equal((await user('/api/uploads', { method: 'POST', body: { title: 'Huge', name: 'a.mp4', mime: 'video/mp4', size: 101 * 1024 * 1024 } })).status, 400);
+  const huge = await user('/api/uploads', { method: 'POST', body: { title: 'Huge', name: 'a.mp4', mime: 'video/mp4', size: 20 * 1024 * 1024 * 1024 } });
+  assert.equal(huge.status, 201, 'there is no file size limit');
 });
 
 test('large uploads arrive in ordered chunks and can be cancelled', async () => {
@@ -453,4 +457,53 @@ test('leaderboard awards points per approved submission and shows the top 10 to 
   assert.ok(after.top.every((entry, i, all) => i === 0 || all[i - 1].points >= entry.points));
   assert.equal((await (await signIn('org_admin'))('/api/leaderboard')).status, 200);
   for (const id of ids) await admin(`/api/content/${id}`, { method: 'DELETE' });
+});
+
+test('files and links can be added to uploads, by the owner and by others, and each addition needs approval', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const admin = await signIn('site_admin');
+  const parent = (await user('/api/content', { method: 'POST', body: { title: 'Gita series', url: 'https://example.org/series' } })).json;
+
+  assert.equal((await viewer('/api/content', { method: 'POST', body: { title: 'Too early', url: 'https://example.org/x', parentId: parent.id } })).status, 404,
+    'others cannot add to an upload that is not yet approved');
+  const ownEarly = await user('/api/content', { method: 'POST', body: { title: 'Part 1', url: 'https://example.org/1', parentId: parent.id } });
+  assert.equal(ownEarly.status, 201, 'owners can add to their pending upload');
+
+  await admin(`/api/content/${parent.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const started = await viewer('/api/uploads', { method: 'POST', body: { title: 'Slide', name: 'slide.png', mime: 'image/png', size: png.length, parentId: parent.id } });
+  assert.equal(started.status, 201);
+  const added = await viewer(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png });
+  assert.equal(added.json.status, 'pending');
+
+  const library = (await viewer('/api/content?scope=library')).json.items;
+  assert.ok(library.some(item => item.id === parent.id));
+  assert.ok(!library.some(item => item.id === ownEarly.json.id || item.id === added.json.id), 'additions are not separate library items');
+  assert.deepEqual((await viewer(`/api/content/${parent.id}/parts`)).json.items.map(item => item.id), [added.json.id], 'others see only approved parts and their own');
+  const queue = (await admin('/api/content?scope=review')).json.items.find(item => item.id === added.json.id);
+  assert.equal(queue.parent_title, 'Gita series');
+
+  await admin(`/api/content/${added.json.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  await admin(`/api/content/${ownEarly.json.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  assert.equal((await viewer('/api/content?scope=library')).json.items.find(item => item.id === parent.id).parts, 2);
+  assert.equal((await viewer(`/api/content/${added.json.id}/file`)).status, 200);
+  assert.equal((await viewer('/api/content', { method: 'POST', body: { title: 'Nested', url: 'https://example.org/n', parentId: added.json.id } })).status, 400);
+  assert.equal((await viewer(`/api/content/${added.json.id}/bookmark`, { method: 'POST' })).status, 400);
+
+  assert.equal((await admin(`/api/content/${parent.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await viewer(`/api/content/${added.json.id}/file`)).status, 404, 'deleting an upload removes its additions');
+  assert.equal((await user('/api/content?scope=mine')).json.items.filter(item => item.parent_id === parent.id).length, 0);
+});
+
+test('rejecting an upload also rejects its pending additions', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const parent = (await user('/api/content', { method: 'POST', body: { title: 'Rejected series', url: 'https://example.org/rs' } })).json;
+  const part = (await user('/api/content', { method: 'POST', body: { title: 'Rejected part', url: 'https://example.org/rp', parentId: parent.id } })).json;
+  await admin(`/api/content/${parent.id}/review`, { method: 'POST', body: { decision: 'rejected', note: 'Not suitable' } });
+  const mine = (await user('/api/content?scope=mine')).json.items.find(item => item.id === part.id);
+  assert.equal(mine.status, 'rejected');
+  assert.equal((await user('/api/content', { method: 'POST', body: { title: 'Late', url: 'https://example.org/l', parentId: parent.id } })).status, 409);
+  await user(`/api/content/${parent.id}`, { method: 'DELETE' });
 });

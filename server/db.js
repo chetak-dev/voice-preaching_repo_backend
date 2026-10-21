@@ -127,11 +127,15 @@ export function openDatabase({ url, authToken, directory }) {
       ['deletion_token', 'TEXT'],
       ['deletion_lock_expires', 'INTEGER'],
       ['visibility', "TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public','private'))"],
+      // Set when this file or link was added to an existing upload.
+      ['parent_id', 'TEXT REFERENCES content(id)'],
     ]);
+    await client.execute('CREATE INDEX IF NOT EXISTS content_parent ON content(parent_id, created_at)');
     await addColumns('uploads', [
       ['chunk_lock', 'TEXT'],
       ['chunk_lock_expires', 'INTEGER'],
       ['completed_key', 'TEXT'],
+      ['parent_id', 'TEXT'],
     ]);
   })();
   return db;

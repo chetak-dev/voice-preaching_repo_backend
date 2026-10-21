@@ -65,7 +65,6 @@ function configuration(overrides) {
     siteAdmins: (process.env.SITE_ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
     serviceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
     encryptionKey: process.env.STORAGE_ENCRYPTION_KEY || '',
-    maxUploadMB: Number(process.env.MAX_UPLOAD_MB || 100),
     ...overrides,
   };
   if (new URL(config.origin).origin !== config.origin) throw new Error('APP_ORIGIN must be an origin without a trailing slash.');
@@ -74,9 +73,6 @@ function configuration(overrides) {
     throw new Error('Production requires Google OAuth credentials and SITE_ADMIN_EMAILS.');
   }
   if (config.serverless && !config.databaseUrl) throw new Error('Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN: serverless hosts cannot keep a local database.');
-  if (!Number.isInteger(config.maxUploadMB) || config.maxUploadMB < 1 || config.maxUploadMB > 5120) {
-    throw new Error('MAX_UPLOAD_MB must be an integer between 1 and 5120.');
-  }
   if (!Number.isInteger(config.trustProxy) || config.trustProxy < 0 || config.trustProxy > 10) {
     throw new Error('TRUST_PROXY must be the number of proxies in front of the server (0-10).');
   }
@@ -167,7 +163,6 @@ export function createApp(overrides = {}) {
 
   app.get('/api/config', (req, res) => res.json({
     googleConfigured: Boolean(config.googleClientId && config.googleClientSecret),
-    maxUploadMB: config.maxUploadMB,
   }));
   app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.get('/api/auth/me', authenticated, (req, res) => res.json({ user: publicUser(req.user) }));
@@ -284,19 +279,37 @@ export function createApp(overrides = {}) {
   }));
 
   app.use('/api', authenticated);
-  const contentQuery = `SELECT c.*, u.name AS uploader, r.name AS reviewer,
+  const contentQuery = `SELECT c.*, u.name AS uploader, r.name AS reviewer, p.title AS parent_title,
     EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked,
-    (SELECT count(*) FROM content_views v WHERE v.content_id = c.id) AS views
+    (SELECT count(*) FROM content_views v WHERE v.content_id = c.id) AS views,
+    (SELECT count(*) FROM content a WHERE a.parent_id = c.id AND a.status = 'approved') AS parts
     FROM content c JOIN users u ON u.id = c.uploader_id
-    LEFT JOIN users r ON r.id = c.reviewed_by`;
+    LEFT JOIN users r ON r.id = c.reviewed_by
+    LEFT JOIN content p ON p.id = c.parent_id`;
   function visible(item, user) {
     const privateAccess = item.visibility !== 'private' || item.uploader_id === user.id || isReviewer(user);
     return privateAccess && (item.status === 'approved' || isReviewer(user) || item.uploader_id === user.id);
   }
-  async function getContent(req) {
-    const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, req.params.id);
+  async function getContent(req, id = req.params.id) {
+    const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, id);
     if (!item || !visible(item, req.user)) throw fail(404, 'Content not found.');
+    // Additions are only reachable while the upload they belong to is reachable.
+    if (item.parent_id) {
+      const parent = await db.get('SELECT * FROM content WHERE id = ?', item.parent_id);
+      if (!parent || (!visible(parent, req.user) && item.uploader_id !== req.user.id && !isReviewer(req.user))) throw fail(404, 'Content not found.');
+    }
     return { item };
+  }
+  // Contributors may add to their own upload while it is pending or approved; anyone may add to approved uploads.
+  async function additionTarget(req) {
+    const parentId = req.body.parentId;
+    if (parentId == null || parentId === '') return null;
+    if (typeof parentId !== 'string') throw fail(400, 'Choose a valid upload to add to.');
+    const { item: parent } = await getContent(req, parentId);
+    if (parent.parent_id) throw fail(400, 'Add files to the main upload instead.');
+    if (parent.status === 'rejected') throw fail(409, 'Rejected uploads cannot receive more files.');
+    if (parent.status !== 'approved' && parent.uploader_id !== req.user.id) throw fail(409, 'This upload is still waiting for approval.');
+    return parent;
   }
   const count = async (sql, ...args) => (await db.get(sql, ...args)).n;
   app.get('/api/content', h(async (req, res) => {
@@ -304,13 +317,20 @@ export function createApp(overrides = {}) {
     if (!['library', 'mine', 'review', 'saved'].includes(scope)) throw fail(400, 'Unknown content view.');
     if (scope === 'review' && !isReviewer(req.user)) throw fail(403, 'Only administrators can review submissions.');
     const clauses = {
-      library: "c.status = 'approved' AND c.visibility = 'public'", mine: 'c.uploader_id = ?',
-      review: "c.status = 'pending'", saved: "c.status = 'approved' AND c.visibility = 'public' AND EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?)",
+      library: "c.status = 'approved' AND c.visibility = 'public' AND c.parent_id IS NULL", mine: 'c.uploader_id = ?',
+      review: "c.status = 'pending'", saved: "c.status = 'approved' AND c.visibility = 'public' AND c.parent_id IS NULL AND EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?)",
     };
     const params = [req.user.id];
     if (scope === 'mine' || scope === 'saved') params.push(req.user.id);
     const rows = await db.all(`${contentQuery} WHERE ${clauses[scope]} ORDER BY c.created_at DESC`, ...params);
     res.json({ items: rows.map(({ storage_key, ...item }) => item) });
+  }));
+  app.get('/api/content/:id/parts', h(async (req, res) => {
+    const { item } = await getContent(req);
+    const rows = await db.all(`${contentQuery} WHERE c.parent_id = ?
+      AND (c.status = 'approved' OR c.uploader_id = ? OR (? = 1 AND c.status = 'pending'))
+      ORDER BY c.created_at`, req.user.id, item.id, req.user.id, isReviewer(req.user) ? 1 : 0);
+    res.json({ items: rows.map(({ storage_key, ...part }) => part) });
   }));
   app.get('/api/overview', h(async (req, res) => {
     const approved = await count("SELECT count(*) AS n FROM content WHERE status = 'approved' AND visibility = 'public'");
@@ -375,12 +395,13 @@ export function createApp(overrides = {}) {
     const description = text(req.body.description || '', 'Description', 2000, 0);
     const url = text(req.body.url, 'URL', 2048);
     let parsed;
-    try { parsed = new URL(url); } catch { throw fail(400, 'Enter a valid HTTPS link.'); }
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw fail(400, 'Links must use HTTPS and cannot contain credentials.');
+    try { parsed = new URL(url); } catch { throw fail(400, 'Enter a valid link.'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw fail(400, 'Links must start with http:// or https:// and cannot contain credentials.');
+    const parent = await additionTarget(req);
     const id = randomUUID();
-    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at)
-      VALUES (?,?,?,'link',?,'pending',?,?)`, id, title, description, url, req.user.id, new Date().toISOString());
-    await audit(db, req.user.id, 'Submitted content', title);
+    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at,parent_id)
+      VALUES (?,?,?,'link',?,'pending',?,?,?)`, id, title, description, url, req.user.id, new Date().toISOString(), parent?.id ?? null);
+    await audit(db, req.user.id, parent ? 'Added to upload' : 'Submitted content', parent ? `${title} → ${parent.title}` : title);
     res.status(201).json({ id, status: 'pending', message: 'Submitted for admin approval.' });
   }));
 
@@ -420,13 +441,13 @@ export function createApp(overrides = {}) {
     const mime = normalizeMime(req.body.mime);
     const type = classify(mime);
     if (!Number.isInteger(size) || size < 1) throw fail(400, 'Empty files cannot be uploaded.');
-    if (size > config.maxUploadMB * 1024 * 1024) throw fail(400, `File exceeds the ${config.maxUploadMB} MB upload limit.`);
+    const parent = await additionTarget(req);
     const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
     const id = randomUUID();
     const started = await storage.startUpload({ id, target, name, mime, size });
-    await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, mime, name, size,
-    started.node, started.sessionUri, Date.now());
+    await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at,parent_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, mime, name, size,
+    started.node, started.sessionUri, Date.now(), parent?.id ?? null);
     res.status(201).json({ id, chunkSize: CHUNK_SIZE });
   }));
   const ownUpload = async req => {
@@ -491,19 +512,27 @@ export function createApp(overrides = {}) {
       let created = false;
       if (!existing) {
         try {
+          // The upload it belongs to may have been removed while this file was uploading.
+          const parent = upload.parent_id ? await db.get("SELECT id FROM content WHERE id = ? AND status != 'rejected'", upload.parent_id) : null;
+          if (upload.parent_id && !parent) {
+            await discard(upload, token);
+            locked = false;
+            throw fail(409, 'The upload you were adding to is no longer available.');
+          }
           await db.run(`INSERT INTO content
-            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
-          upload.original_name, upload.size, upload.node, completedKey, req.user.id, new Date().toISOString());
+            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at,parent_id)
+            VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
+          upload.original_name, upload.size, upload.node, completedKey, req.user.id, new Date().toISOString(), upload.parent_id ?? null);
           created = true;
         } catch (error) {
+          if (error.status === 409) throw error;
           existing = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ?', id, req.user.id);
           if (!existing) throw error;
         }
       }
       await db.run('DELETE FROM uploads WHERE id = ? AND chunk_lock = ?', upload.id, token);
       locked = false;
-      if (created) await audit(db, req.user.id, 'Submitted content', upload.title);
+      if (created) await audit(db, req.user.id, upload.parent_id ? 'Added to upload' : 'Submitted content', upload.title);
       const status = created ? 201 : 200;
       return res.status(status).json({ done: true, id, status: 'pending', message: 'Submitted for admin approval.' });
     } finally {
@@ -526,6 +555,10 @@ export function createApp(overrides = {}) {
         AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
     req.body.decision, req.user.id, note, new Date().toISOString(), item.id, Date.now());
     if (!result.changes) throw fail(409, 'Another administrator has already reviewed this submission.');
+    if (req.body.decision === 'rejected' && !item.parent_id) {
+      await db.run(`UPDATE content SET status = 'rejected', reviewed_by = ?, review_note = ?, reviewed_at = ?
+        WHERE parent_id = ? AND status = 'pending'`, req.user.id, note, new Date().toISOString(), item.id);
+    }
     await audit(db, req.user.id, req.body.decision === 'approved' ? 'Approved content' : 'Rejected content', item.title);
     res.json({ ok: true });
   }));
@@ -554,6 +587,7 @@ export function createApp(overrides = {}) {
     const { item } = await getContent(req);
     if (req.user.role !== 'site_admin' && item.uploader_id !== req.user.id) throw fail(403, 'Only the contributor or a site admin can change visibility.');
     if (item.status !== 'approved') throw fail(409, 'Only approved content can change visibility.');
+    if (item.parent_id) throw fail(409, 'Added files follow the visibility of the upload they belong to.');
     const visibility = req.body.visibility;
     if (!['public', 'private'].includes(visibility)) throw fail(400, 'Choose public or private visibility.');
     const changed = await db.run(`UPDATE content SET visibility = ? WHERE id = ? AND status = 'approved'
@@ -565,7 +599,7 @@ export function createApp(overrides = {}) {
 
   app.post('/api/content/:id/bookmark', h(async (req, res) => {
     const { item } = await getContent(req);
-    if (item.status !== 'approved' || item.visibility !== 'public') throw fail(400, 'Only public, approved content can be saved.');
+    if (item.status !== 'approved' || item.visibility !== 'public' || item.parent_id) throw fail(400, 'Only public, approved uploads can be saved.');
     const current = await db.get('SELECT 1 AS found FROM bookmarks WHERE user_id = ? AND content_id = ?', req.user.id, item.id);
     if (current) await db.run('DELETE FROM bookmarks WHERE user_id = ? AND content_id = ?', req.user.id, item.id);
     else await db.run('INSERT INTO bookmarks VALUES (?, ?)', req.user.id, item.id);
@@ -592,15 +626,25 @@ export function createApp(overrides = {}) {
     token, now + 5 * 60_000, item.id, now, isAdmin ? 1 : 0, req.user.id);
     if (!claim.changes) throw fail(409, 'This content is already being removed or its status changed. Refresh and try again.');
 
-    if (item.storage_key) {
+    const removeStored = async (row, release) => {
+      if (!row.storage_key) return;
       try {
-        await storage.remove({ node: item.storage_node, key: item.storage_key });
+        await storage.remove({ node: row.storage_node, key: row.storage_key });
       } catch (error) {
-        await db.run('UPDATE content SET deletion_token = NULL, deletion_lock_expires = NULL WHERE id = ? AND deletion_token = ?', item.id, token);
-        console.error('Stored file could not be removed; content record retained for retry:', item.storage_node, item.storage_key, error.message);
+        await release();
+        console.error('Stored file could not be removed; content record retained for retry:', row.storage_node, row.storage_key, error.message);
         throw fail(503, 'The stored file could not be removed, so the content was kept. Please retry later.');
       }
+    };
+    const release = () => db.run('UPDATE content SET deletion_token = NULL, deletion_lock_expires = NULL WHERE id = ? AND deletion_token = ?', item.id, token);
+    // Removing an upload also removes every file and link that was added to it.
+    for (const part of await db.all('SELECT * FROM content WHERE parent_id = ?', item.id)) {
+      await removeStored(part, release);
+      await db.run('DELETE FROM bookmarks WHERE content_id = ?', part.id);
+      await db.run('DELETE FROM content_views WHERE content_id = ?', part.id);
+      await db.run('DELETE FROM content WHERE id = ?', part.id);
     }
+    await removeStored(item, release);
     await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
     await db.run('DELETE FROM content_views WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);

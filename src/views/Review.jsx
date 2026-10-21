@@ -108,6 +108,7 @@ export default function Review({ user, onChanged }) {
                     {item.type !== 'link' && <span className="text-xs text-slate-400">{formatBytes(item.size)}</span>}
                   </div>
                   {item.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{item.description}</p>}
+                  {item.parent_title && <p className="mt-1 truncate text-xs font-medium text-brand-700">Adding to: {item.parent_title}</p>}
                   {item.type === 'link' && <p className="mt-1 truncate text-xs text-sky-700">{item.url}</p>}
                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                     <Avatar name={item.uploader} size="sm" />
@@ -132,7 +133,7 @@ export default function Review({ user, onChanged }) {
         </div>
       )}
 
-      <PreviewModal item={preview} onClose={() => setPreview(null)}
+      <PreviewModal item={preview} onClose={() => setPreview(null)} user={user}
         actions={preview && !isOwn(preview) && (
           <>
             <Button variant="secondary" icon={X} className="text-rose-600" onClick={() => { setRejecting(preview); setPreview(null); }}>Reject</Button>

@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import {
-  AlertTriangle, AudioLines, CheckCircle2, FileText, Image as ImageIcon, Info, Link2, Loader2, Music, Video, X,
+  AlertTriangle, CheckCircle2, FileText, Image as ImageIcon, Info, Link2, Loader2, Music, Video, X,
 } from 'lucide-react';
 
 export const TYPE_META = {
@@ -25,16 +25,34 @@ export const STATUS_META = {
 
 export const cx = (...classes) => classes.filter(Boolean).join(' ');
 
-export function Logo({ size = 'md', light = false, tagline = true }) {
+// The VOICE mark: a bold, two-tone "V".
+export function LogoMark({ className }) {
+  const id = React.useId().replace(/:/g, '');
+  return (
+    <svg viewBox="0 0 48 48" className={className} aria-hidden="true">
+      <defs>
+        <linearGradient id={`${id}bg`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#7c3aed" /><stop offset="1" stopColor="#4f46e5" />
+        </linearGradient>
+      </defs>
+      <rect width="48" height="48" rx="14" fill={`url(#${id}bg)`} />
+      <g fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="6">
+        <path d="M24 34 34 14" strokeOpacity=".7" />
+        <path d="M14 14 24 34" />
+      </g>
+    </svg>
+  );
+}
+
+export function Logo({ size = 'md', light = false, tagline = true, textClassName }) {
   const box = size === 'lg' ? 'h-11 w-11 rounded-2xl' : size === 'sm' ? 'h-8 w-8 rounded-xl' : 'h-9 w-9 rounded-xl';
   return (
     <div className="flex items-center gap-2.5">
-      <div className={cx('flex shrink-0 items-center justify-center bg-voice text-white shadow-glow', box, light && 'ring-2 ring-white/30')}>
-        <AudioLines className={size === 'lg' ? 'h-6 w-6' : 'h-5 w-5'} strokeWidth={2.25} />
-      </div>
-      <div className="leading-none">
-        <p className={cx('font-extrabold tracking-[0.18em]', size === 'lg' ? 'text-xl' : 'text-base', light ? 'text-white' : 'text-slate-900')}>VOICE</p>
-        {tagline && <p className={cx('mt-1 text-[11px] font-medium', light ? 'text-white/70' : 'text-slate-500')}>Content Hub</p>}
+      <LogoMark className={cx('shrink-0 shadow-glow', box, light && 'ring-2 ring-white/30')} />
+      <div className={cx('leading-none', textClassName)}>
+        <p className={cx('font-extrabold tracking-[0.18em]', size === 'lg' ? 'text-xl' : 'text-base',
+          light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>VOICE</p>
+        {tagline && <p className={cx('mt-px text-[11px] font-medium', light ? 'text-white/70' : 'text-slate-500')}>Content Hub</p>}
       </div>
     </div>
   );

@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
-import { Bookmark, BookmarkCheck, Download, ExternalLink, Eye, Share2 } from 'lucide-react';
-import { fileUrl } from '../api.js';
+import React, { useEffect, useState } from 'react';
+import { Bookmark, BookmarkCheck, Download, ExternalLink, Eye, Layers, Play, Plus, Share2 } from 'lucide-react';
+import { api, fileUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
 import { Avatar, Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
 
-export const canShare = item => item.status === 'approved' && item.visibility !== 'private';
+export const canShare = item => item.status === 'approved' && item.visibility !== 'private' && !item.parent_id;
 
 export function contentLink(item) {
   const url = new URL('/', window.location.origin);
@@ -66,8 +66,14 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
       <button type="button" onClick={() => onPreview(item)} className="relative block aspect-[16/10] w-full overflow-hidden" aria-label={`Preview ${item.title}`}>
         <ContentThumb item={item} className="h-full w-full transition duration-300 group-hover:scale-[1.02]" />
         <span className="absolute left-3 top-3"><Badge tone={cx(meta.tone, 'bg-white/90 backdrop-blur')} icon={meta.icon}>{meta.label}</Badge></span>
+        {item.parts > 0 && (
+          <span className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-slate-900/75 px-2 py-0.5 text-xs font-medium text-white backdrop-blur">
+            <Layers className="h-3.5 w-3.5" />+{item.parts}
+          </span>
+        )}
       </button>
       <div className="flex flex-1 flex-col p-4">
+        {item.parent_title && <p className="mb-1 truncate text-xs font-medium text-brand-700">Added to: {item.parent_title}</p>}
         <div className="flex items-start justify-between gap-2">
           <h3 className="line-clamp-2 text-sm font-semibold text-slate-900">{item.title}</h3>
           <div className="-mr-1 -mt-0.5 flex shrink-0 items-center">
@@ -101,7 +107,65 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
   );
 }
 
-export function PreviewModal({ item, onClose, actions, onShare }) {
+function UploadParts({ item, user, onAddTo }) {
+  const { openPlayer } = useMediaPlayer();
+  const [parts, setParts] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setParts(null);
+    api(`/content/${item.id}/parts`).then(data => live && setParts(data.items)).catch(() => live && setParts([]));
+    return () => { live = false; };
+  }, [item.id]);
+  const canAdd = onAddTo && user && (item.status === 'approved' || (item.uploader_id === user.id && item.status === 'pending'));
+  if (!parts?.length && !canAdd) return null;
+  return (
+    <section className="mt-5 border-t border-slate-100 pt-4" aria-label="Files in this upload">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+          <Layers className="h-4 w-4 text-slate-400" /> More in this upload{parts?.length ? ` (${parts.length})` : ''}
+        </h3>
+        {canAdd && <Button variant="secondary" size="sm" icon={Plus} onClick={() => onAddTo(item)}>Add files</Button>}
+      </div>
+      {parts === null ? <p className="text-sm text-slate-400">Loading…</p> : !parts.length ? (
+        <p className="text-sm text-slate-500">Have another part, slides or a related link? Add it here. It will appear after admin approval.</p>
+      ) : (
+        <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+          {parts.map(part => {
+            const meta = TYPE_META[part.type] || TYPE_META.link;
+            const media = part.type === 'audio' || part.type === 'video';
+            const href = part.type === 'link' ? part.url : fileUrl(part.id, Boolean(MIME_INLINE[part.mime]));
+            return (
+              <li key={part.id} className="flex items-center gap-3 px-3 py-2.5">
+                <div className={cx('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', meta.tone)}><meta.icon className="h-4 w-4" /></div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-900">{part.title}</p>
+                  <p className="truncate text-xs text-slate-500">
+                    {part.type === 'link' ? hostOf(part.url) : formatBytes(part.size)} · {part.uploader}
+                  </p>
+                </div>
+                {part.status !== 'approved' && <Badge tone={STATUS_META[part.status].tone}>{STATUS_META[part.status].label}</Badge>}
+                {media ? (
+                  <button type="button" onClick={() => openPlayer(part)} className="rounded-lg p-2 text-brand-700 hover:bg-brand-50" aria-label={`Play ${part.title}`}><Play className="h-4 w-4" /></button>
+                ) : (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="rounded-lg p-2 text-brand-700 hover:bg-brand-50" aria-label={`Open ${part.title}`}>
+                    {part.type === 'link' ? <ExternalLink className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </a>
+                )}
+                {part.type !== 'link' && (
+                  <a href={fileUrl(part.id)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label={`Download ${part.title}`}><Download className="h-4 w-4" /></a>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const MIME_INLINE = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'application/pdf': 1, 'text/plain': 1 };
+
+export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo }) {
   const { openPlayer } = useMediaPlayer();
   if (!item) return null;
   const meta = TYPE_META[item.type] || TYPE_META.link;
@@ -134,6 +198,8 @@ export function PreviewModal({ item, onClose, actions, onShare }) {
         {item.status === 'approved' && <div><dt className="text-slate-500">Views</dt><dd className="font-medium text-slate-900"><ViewCount value={item.views} /></dd></div>}
       </dl>
       {item.description && <p className="mt-4 whitespace-pre-line text-sm text-slate-600">{item.description}</p>}
+      {item.parent_title && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900">Added to the upload <span className="font-semibold">“{item.parent_title}”</span></p>}
+      {!item.parent_id && item.status !== 'rejected' && <UploadParts item={item} user={user} onAddTo={onAddTo} />}
     </Modal>
   );
 }

@@ -36,11 +36,23 @@ const BOTTOM_NAV = {
 };
 
 const allowed = (id, role) => !ITEMS[id].roles || ITEMS[id].roles.includes(role);
+const reveal = 'opacity-0 transition-opacity duration-200 group-hover/side:opacity-100 group-focus-within/side:opacity-100';
 const currentHash = () => window.location.hash.replace(/^#\/?/, '') || 'library';
 
 function CountBadge({ value, className }) {
   if (!value) return null;
   return <span className={cx('rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white', className)}>{value > 99 ? '99+' : value}</span>;
+}
+
+function PointsPill({ points, onClick, light }) {
+  return (
+    <button type="button" onClick={onClick} title="Leaderboard" aria-label={`Leaderboard, ${points ?? 0} points`}
+      className={cx('flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition active:scale-95',
+        light ? 'bg-white/15 text-white ring-1 ring-white/30 hover:bg-white/25' : 'bg-amber-400/15 text-amber-300 ring-1 ring-amber-300/30 hover:bg-amber-400/25')}>
+      <Trophy className="h-3.5 w-3.5" />
+      {points == null ? '–' : points.toLocaleString()}
+    </button>
+  );
 }
 
 function Shell({ user, config, onSignOut }) {
@@ -72,6 +84,8 @@ function Shell({ user, config, onSignOut }) {
     if (isReviewer) api('/overview').then(data => setPending(data.pending)).catch(() => {});
   }, [isReviewer]);
   useEffect(() => { refreshPending(); }, [refreshPending, view]);
+  const [points, setPoints] = useState(null);
+  useEffect(() => { api('/leaderboard').then(data => setPoints(data.me.points)).catch(() => {}); }, [view]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -88,13 +102,16 @@ function Shell({ user, config, onSignOut }) {
   }, [sheetOpen]);
 
   const active = ITEMS[view] && allowed(view, user.role) ? view : 'library';
-  const props = { user, config, navigate, onChanged: refreshPending, sharedContentId };
+  const [addTarget, setAddTarget] = useState(null);
+  useEffect(() => { if (active !== 'upload') setAddTarget(null); }, [active]);
+  const addTo = useCallback(item => { setAddTarget({ id: item.id, title: item.title }); navigate('upload'); }, [navigate]);
+  const props = { user, config, navigate, onChanged: refreshPending, onAddTo: addTo, sharedContentId };
   const page = {
     library: <Library key="library" scope="library" {...props} />,
     saved: <Library key="saved" scope="saved" {...props} />,
     leaderboard: <Leaderboard {...props} />,
     mine: <Library key="mine" scope="mine" {...props} />,
-    upload: <Upload {...props} />,
+    upload: <Upload key={addTarget?.id || 'new'} parent={addTarget} onClearParent={() => setAddTarget(null)} {...props} />,
     review: <Review {...props} />,
     members: <Members {...props} />,
     storage: <Storage {...props} />,
@@ -102,39 +119,40 @@ function Shell({ user, config, onSignOut }) {
   }[active];
 
   const primary = BOTTOM_NAV[user.role];
-  const overflow = Object.keys(ITEMS).filter(id => id !== 'upload' && !primary.includes(id) && allowed(id, user.role));
+  const overflow = Object.keys(ITEMS).filter(id => !['upload', 'leaderboard'].includes(id) && !primary.includes(id) && allowed(id, user.role));
   const role = ROLE_META[user.role];
 
   return (
     <div className="min-h-screen">
       <PersistentMediaPlayer />
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-72 overflow-hidden bg-slate-950 text-white lg:flex lg:flex-col">
+      {/* Desktop sidebar: an icon rail that expands over the page on hover or keyboard focus */}
+      <aside className="group/side fixed inset-y-0 left-0 z-40 hidden w-20 overflow-hidden bg-slate-950 text-white transition-[width,box-shadow] duration-200 ease-out hover:w-72 hover:shadow-2xl focus-within:w-72 focus-within:shadow-2xl lg:flex lg:flex-col">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-indigo-950 via-slate-950 to-slate-950" />
         <div className="pointer-events-none absolute -left-24 -top-24 h-64 w-64 rounded-full bg-violet-600/30 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-32 -right-24 h-72 w-72 rounded-full bg-pink-600/20 blur-3xl" />
-        <div className="relative px-6 py-6"><Logo light /></div>
-        <nav className="relative flex-1 space-y-7 overflow-y-auto px-4 py-2">
+        <div className="relative w-72 px-[22px] py-6"><Logo light textClassName={reveal} /></div>
+        <nav className="relative w-72 flex-1 space-y-7 overflow-y-auto overflow-x-hidden px-3 py-2">
           {SECTIONS.map(([section, ids]) => {
             const items = ids.filter(id => allowed(id, user.role));
             if (!items.length) return null;
             return (
               <div key={section}>
-                <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-white/40">{section}</p>
+                <p className={cx('mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-white/40', reveal)}>{section}</p>
                 <ul className="space-y-1">
                   {items.map(id => {
                     const item = ITEMS[id];
                     const on = active === id;
                     return (
                       <li key={id}>
-                        <button type="button" onClick={() => navigate(id)}
-                          className={cx('group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-medium transition',
+                        <button type="button" onClick={() => navigate(id)} title={item.label}
+                          className={cx('flex w-14 items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-[width,background-color,color] duration-200 group-hover/side:w-full group-focus-within/side:w-full',
                             on ? 'bg-white/10 text-white shadow-inner' : 'text-white/65 hover:bg-white/5 hover:text-white')}>
-                          <span className={cx('flex h-8 w-8 items-center justify-center rounded-lg transition', on ? 'bg-voice text-white shadow-glow' : item.tone)}>
+                          <span className={cx('relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition', on ? 'bg-voice text-white shadow-glow' : item.tone)}>
                             <item.icon className="h-4 w-4" />
+                            {item.badge && <CountBadge value={pending} className="absolute -right-1.5 -top-1.5 group-hover/side:hidden group-focus-within/side:hidden" />}
                           </span>
-                          {item.label}
-                          {item.badge && <CountBadge value={pending} className="ml-auto px-2 py-1 text-[11px]" />}
+                          <span className={cx('whitespace-nowrap', reveal)}>{item.label}</span>
+                          {item.badge && <CountBadge value={pending} className={cx('ml-auto px-2 py-1 text-[11px]', reveal)} />}
                         </button>
                       </li>
                     );
@@ -144,33 +162,35 @@ function Shell({ user, config, onSignOut }) {
             );
           })}
         </nav>
-        <div className="relative m-4 rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-          <div className="flex items-center gap-3">
+        <div className="relative m-3 w-14 overflow-hidden rounded-2xl bg-white/5 p-[10px] ring-1 ring-white/10 transition-[width] duration-200 group-hover/side:w-[264px] group-focus-within/side:w-[264px]">
+          <div className="flex w-[244px] items-center gap-3">
             <Avatar name={user.name} />
-            <div className="min-w-0 flex-1">
+            <div className={cx('min-w-0 flex-1', reveal)}>
               <p className="truncate text-sm font-semibold">{user.name}</p>
               <p className="truncate text-xs text-white/50">{role.label}</p>
             </div>
-            <button type="button" onClick={askSignOut} className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Sign out" title="Sign out">
-              <LogOut className="h-4 w-4" />
-            </button>
+            <div className={cx('flex items-center gap-1', reveal)}>
+              <PointsPill points={points} onClick={() => navigate('leaderboard')} />
+              <button type="button" onClick={askSignOut} className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Sign out" title="Sign out">
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
-
       {/* Mobile top app bar */}
       <header className="pt-safe sticky top-0 z-30 bg-voice text-white shadow-md lg:hidden">
         <div className="flex h-14 items-center gap-3 px-4">
-          <Logo size="sm" light tagline={false} />
-          <span className="h-5 w-px bg-white/30" />
-          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{ITEMS[active].short || ITEMS[active].label}</h1>
+          <Logo size="sm" light />
+          <div className="flex-1" />
+          <PointsPill light points={points} onClick={() => navigate('leaderboard')} />
           <button type="button" onClick={() => setSheetOpen(true)} className="rounded-full ring-2 ring-white/40 transition active:scale-95" aria-label="Account and menu">
             <Avatar name={user.name} size="sm" />
           </button>
         </div>
       </header>
 
-      <div className="lg:pl-72">
+      <div className="lg:pl-20">
         <main key={active} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-10">{page}</main>
       </div>
 

@@ -11,6 +11,7 @@ A professional content-sharing platform for communities. Members contribute **im
   | **Org admin** | Approve or reject submissions (except their own), plus everything a member can do. Nothing else. |
   | **Member** | Browse the library, save items, contribute content, track their submissions |
 - **Approval workflow** — every upload (including from org admins and site admins) starts as *Pending* and only appears in the library once a site admin or org admin approves it. Org admins cannot approve their own submissions. Rejections require a note, which the contributor sees under **My submissions**.
+- **Adding to an upload** — open any item and choose **Add files** to attach more files or links to it. Contributors can add to their own upload while it is pending or approved; anyone can add to an approved upload. Each addition is reviewed separately, earns its contributor points once approved, and is removed if the upload is deleted. Rejecting an upload also rejects its pending additions.
 - **Multi-Google-Drive storage** — connect as many Drives as you need; uploads are routed automatically (see below).
 - Sign up / sign in with email + password or Google (one sign-in page for every role), scrypt-hashed passwords, file signature verification, rate limiting, CSRF origin checks, encrypted refresh tokens, audit log.
 
@@ -58,7 +59,7 @@ Each free Google account offers 15 GB. The platform treats every Drive folder as
 
 **Routing:** for each upload, the server picks the *active, connected* Drive with the most free space (quota is cached for 5 minutes). When a Drive is nearly full, **Pause** it — existing files stay available, new uploads go elsewhere. If no Drive is connected, the file is stored locally on the server (`DATA_DIR/files`) — except on Vercel, where a connected Drive is required. Site admins can also choose a specific destination when uploading.
 
-**Large files:** the browser sends files in 4 MB chunks, which the server streams straight into Google Drive's resumable upload. This keeps every request within serverless limits, so `MAX_UPLOAD_MB` can be raised (up to 5120).
+**Large files:** the browser sends files in 4 MB chunks, which the server streams straight into Google Drive's resumable upload. This keeps every request within serverless limits, so there is no file size limit (only the free space on your Drives).
 
 **Workspace Shared Drives** are also supported: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key file (or paste the key JSON into `GOOGLE_SERVICE_ACCOUNT_JSON`), add the service account as a member of the Shared Drive, and choose *Workspace Shared Drive* when adding storage.
 
@@ -92,7 +93,6 @@ Vercel hosts the website and runs the API as a serverless function (`api/index.j
    | `STORAGE_ENCRYPTION_KEY` | 64 hex chars (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) |
    | `APP_ORIGIN` | `https://<project>.vercel.app` (or your custom domain) |
    | `GOOGLE_SERVICE_ACCOUNT_JSON` | *optional*, the full key JSON for Shared Drives |
-   | `MAX_UPLOAD_MB` | *optional*, default 100 |
 
    Do **not** set `NODE_ENV` — Vercel needs the build tools, and the app already runs in production mode on Vercel.
 5. **Deploy.** Open the site and **Continue with Google** with an address from `SITE_ADMIN_EMAILS`; you become site admin.
