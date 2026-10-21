@@ -3,11 +3,12 @@ import {
   Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, Plus, Trophy, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
-import { Avatar, Badge, Button, Logo, Modal, ROLE_META, Spinner, ToastProvider, cx, useToast } from './components/ui.jsx';
+import { Avatar, Badge, Button, Logo, Modal, ROLE_META, SplashLoader, ToastProvider, cx, useToast } from './components/ui.jsx';
 import { PersistentMediaPlayer, useMediaPlayer } from './components/MediaPlayer.jsx';
 import Activity from './views/Activity.jsx';
 import Library from './views/Library.jsx';
 import Leaderboard from './views/Leaderboard.jsx';
+import Legal, { LEGAL_PAGES } from './views/Legal.jsx';
 import Login from './views/Login.jsx';
 import Members from './views/Members.jsx';
 import Review from './views/Review.jsx';
@@ -178,7 +179,12 @@ function Shell({ user, config, onSignOut }) {
             </div>
           </div>
         </div>
-        <p className="relative mb-3 w-20 whitespace-nowrap text-center text-[10px] text-white/40">{VERSION_LABEL}</p>
+        <div className="relative mb-3 w-20 space-y-1 text-center text-[10px] text-white/40">
+          <p className="flex justify-center gap-1.5">
+            <a href="#/privacy" className="transition hover:text-white">Privacy</a>·<a href="#/terms" className="transition hover:text-white">Terms</a>
+          </p>
+          <p className="whitespace-nowrap">{VERSION_LABEL}</p>
+        </div>
       </aside>
       {/* Mobile top app bar */}
       <header className="pt-safe sticky top-0 z-30 bg-voice text-white shadow-md lg:hidden">
@@ -261,7 +267,11 @@ function Shell({ user, config, onSignOut }) {
               <button type="button" onClick={askSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50">
                 <LogOut className="h-5 w-5" /> Sign out
               </button>
-              <p className="px-3 pt-2 text-center text-[11px] text-slate-400">{VERSION_LABEL}</p>
+              <p className="flex justify-center gap-2 px-3 pt-2 text-[11px] text-slate-400">
+                <a href="#/privacy" className="font-medium text-slate-500 hover:text-brand-700">Privacy Policy</a>·
+                <a href="#/terms" className="font-medium text-slate-500 hover:text-brand-700">Terms & Conditions</a>·
+                <span>{VERSION_LABEL}</span>
+              </p>
             </div>
           </div>
         </div>
@@ -282,7 +292,14 @@ function Shell({ user, config, onSignOut }) {
 
 function Root() {
   const [state, setState] = useState({ loading: true, user: null, config: null });
+  const [hash, setHash] = useState(currentHash);
   const toast = useToast();
+
+  useEffect(() => {
+    const onHash = () => setHash(currentHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const load = useCallback(async () => {
     const config = await api('/config').catch(() => null);
@@ -305,7 +322,8 @@ function Root() {
     window.history.replaceState(null, '', '/');
   }
 
-  if (state.loading) return <div className="flex min-h-screen items-center justify-center"><Spinner /></div>;
+  if (LEGAL_PAGES.includes(hash)) return <Legal page={hash} signedIn={Boolean(state.user)} />;
+  if (state.loading) return <SplashLoader />;
   if (!state.user) return <Login config={state.config} onSignedIn={load} />;
   return <Shell user={state.user} config={state.config} onSignOut={signOut} />;
 }

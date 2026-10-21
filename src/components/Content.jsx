@@ -126,7 +126,11 @@ function UploadParts({ item, user, onAddTo }) {
         </h3>
         {canAdd && <Button variant="secondary" size="sm" icon={Plus} onClick={() => onAddTo(item)}>Add files</Button>}
       </div>
-      {parts === null ? <p className="text-sm text-slate-400">Loading…</p> : !parts.length ? (
+      {parts === null ? (
+        <div className="space-y-2" role="status" aria-label="Loading">
+          {[0, 1].map(i => <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-100" />)}
+        </div>
+      ) : !parts.length ? (
         <p className="text-sm text-slate-500">Have another part, slides or a related link? Add it here. It will appear after admin approval.</p>
       ) : (
         <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">

@@ -25,8 +25,14 @@ export default {
       keyframes: {
         'fade-in': { from: { opacity: 0, transform: 'translateY(4px)' }, to: { opacity: 1, transform: 'none' } },
         'sheet-up': { from: { transform: 'translateY(100%)' }, to: { transform: 'none' } },
+        shimmer: { '100%': { transform: 'translateX(100%)' } },
+        'load-bar': { '0%': { transform: 'translateX(-100%)' }, '100%': { transform: 'translateX(250%)' } },
+        breathe: { '0%, 100%': { transform: 'scale(1)', opacity: 1 }, '50%': { transform: 'scale(0.92)', opacity: 0.85 } },
       },
-      animation: { 'fade-in': 'fade-in 160ms ease-out', 'sheet-up': 'sheet-up 220ms cubic-bezier(0.2, 0, 0, 1)' },
+      animation: {
+        'fade-in': 'fade-in 160ms ease-out', 'sheet-up': 'sheet-up 220ms cubic-bezier(0.2, 0, 0, 1)',
+        shimmer: 'shimmer 1.4s infinite', 'load-bar': 'load-bar 1.2s ease-in-out infinite', breathe: 'breathe 1.6s ease-in-out infinite',
+      },
     },
   },
   plugins: [],

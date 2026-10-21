@@ -124,10 +124,57 @@ export function Avatar({ name = '', size = 'md' }) {
   );
 }
 
-export function Spinner({ label = 'Loading…' }) {
+export function Spinner({ label = 'Loading…', variant = 'list', rows = 5 }) {
+  if (variant === 'grid') {
+    return (
+      <div role="status" aria-label={label} className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {Array.from({ length: 8 }, (_, i) => (
+          <div key={i} className="card overflow-hidden">
+            <Bone className="aspect-video rounded-none" />
+            <div className="space-y-2.5 p-4">
+              <Bone className="h-4 w-3/4" /><Bone className="h-3 w-full" /><Bone className="h-3 w-2/3" />
+              <div className="flex items-center gap-2 pt-2"><Bone className="h-6 w-6 rounded-full" /><Bone className="h-3 w-24" /></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
-    <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate-500">
-      <Loader2 className="h-4 w-4 animate-spin" /> {label}
+    <div role="status" aria-label={label} className="card divide-y divide-slate-100">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-3 p-4">
+          <Bone className="h-10 w-10 shrink-0 rounded-xl" />
+          <div className="flex-1 space-y-2"><Bone className="h-3.5" style={{ width: `${60 - (i % 3) * 12}%` }} /><Bone className="h-3 w-1/3" /></div>
+          <Bone className="hidden h-8 w-20 rounded-lg sm:block" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Bone({ className, style }) {
+  return (
+    <div style={style} className={cx('relative overflow-hidden rounded-md bg-slate-200/70', className)}>
+      <div className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+    </div>
+  );
+}
+
+export function SplashLoader() {
+  return (
+    <div role="status" aria-label="Loading VOICE" className="flex min-h-screen flex-col items-center justify-center gap-6 bg-voice-soft">
+      <div className="relative">
+        <div className="absolute inset-0 animate-ping rounded-3xl bg-brand-400/30" />
+        <LogoMark className="relative h-16 w-16 animate-breathe rounded-3xl shadow-glow" />
+      </div>
+      <div className="text-center">
+        <p className="bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-lg font-extrabold tracking-[0.18em] text-transparent">VOICE</p>
+        <p className="text-xs font-medium text-slate-500">Content Hub</p>
+      </div>
+      <div className="h-1 w-40 overflow-hidden rounded-full bg-brand-100">
+        <div className="h-full w-2/5 animate-load-bar rounded-full bg-voice" />
+      </div>
     </div>
   );
 }

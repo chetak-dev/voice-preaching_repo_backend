@@ -164,6 +164,11 @@ export default function Login({ config, onSignedIn }) {
             <Button type="submit" size="lg" className="w-full" loading={busy} disabled={!canSubmit}>
               {signup ? 'Create account' : 'Sign in'}
             </Button>
+            <p className="pt-1 text-center text-xs leading-relaxed text-slate-500">
+              By {signup ? 'creating an account' : 'continuing'}, you agree to our{' '}
+              <a href="#/terms" className="font-medium text-brand-700 hover:underline">Terms & Conditions</a> and{' '}
+              <a href="#/privacy" className="font-medium text-brand-700 hover:underline">Privacy Policy</a>.
+            </p>
           </form>
         </div>
       </div>

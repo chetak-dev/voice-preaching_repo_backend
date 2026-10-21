@@ -314,7 +314,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
       </div>
 
       {error && <ErrorBanner error={error} onRetry={reload} />}
-      {loading && !data && <Spinner />}
+      {loading && !data && <Spinner variant={layout === 'grid' ? 'grid' : 'list'} rows={8} />}
       {data && !filtered.length && (
         <EmptyState
           icon={scope === 'saved' ? Bookmark : scope === 'mine' ? UploadCloud : FolderOpen}
