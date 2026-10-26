@@ -44,6 +44,26 @@ const publicUser = row => ({
   createdAt: row.created_at,
 });
 
+// Turns Google API failures into actionable messages; raw details are shown only to site admins connecting a Drive.
+export function googleProblem(error, purpose) {
+  const data = error?.response?.data || {};
+  const details = typeof data.error === 'object' ? data.error : {};
+  const reasons = [...(details.errors || []), ...(details.details || [])].map(item => item.reason).filter(Boolean);
+  const text = `${details.message || ''} ${data.error_description || ''} ${error?.message || ''}`;
+  if (reasons.some(r => ['accessNotConfigured', 'SERVICE_DISABLED'].includes(r)) || /has not been used in project|is disabled/i.test(text)) {
+    return 'The Google Drive API is not enabled in your Google Cloud project. Enable it under APIs & Services → Library → Google Drive API, wait a few minutes, then click Connect again.';
+  }
+  if (data.error === 'invalid_client' || /invalid_client|unauthorized_client/i.test(text)) {
+    return 'Google rejected the OAuth client. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your hosting settings.';
+  }
+  if (data.error === 'invalid_grant') return 'Google rejected the sign-in code (it may have expired). Please try again.';
+  if (reasons.includes('insufficientPermissions') || /insufficient (permission|authentication scopes)/i.test(text)) {
+    return 'Google Drive access was not granted. Click Connect again and tick the Google Drive permission.';
+  }
+  if (purpose === 'drive' && details.message) return `Google Drive error: ${details.message}`;
+  return '';
+}
+
 function configuration(overrides) {
   const serverless = Boolean(process.env.VERCEL);
   // On Vercel, NODE_ENV=production would skip installing the build tools, so the platform itself implies production.
@@ -219,12 +239,14 @@ export function createApp(overrides = {}) {
   }
   app.get('/api/auth/google', authLimiter, h((req, res) => beginOAuth(req, res, 'login')));
   app.get('/api/auth/google/callback', authLimiter, h(async (req, res) => {
+    let purpose = 'login';
     try {
       const state = typeof req.query.state === 'string' ? req.query.state : '';
       const record = await db.get('SELECT * FROM oauth_states WHERE hash = ?', hash(state));
       if (!record || record.expires_at < Date.now() || cookie(req, 'voice_oauth') !== state) {
         throw fail(400, 'The sign-in request expired. Please try again.');
       }
+      purpose = record.purpose;
       await db.run('DELETE FROM oauth_states WHERE hash = ?', hash(state));
       res.clearCookie('voice_oauth', cookieOptions);
       if (req.query.error) throw fail(400, 'Google authorization was cancelled or denied.');
@@ -278,7 +300,8 @@ export function createApp(overrides = {}) {
       res.redirect(config.origin);
     } catch (error) {
       console.error('Google authorization failed:', error);
-      const message = error.expose ? error.message : 'Google authorization failed. Check the server configuration and try again.';
+      const message = error.expose ? error.message
+        : googleProblem(error, purpose) || 'Google authorization failed. Check the server configuration and try again.';
       res.redirect(`${config.origin}/?authError=${encodeURIComponent(message)}`);
     }
   }));

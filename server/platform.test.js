@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createApp } from './app.js';
+import { createApp, googleProblem } from './app.js';
 import { hashPassword } from './db.js';
 import { APP_FOLDER, boundedRange, ensureAppFolder } from './storage.js';
 
@@ -370,6 +370,17 @@ test('drives can be registered before Google is configured and accept every file
   assert.equal(sharedNode.status, 201);
   assert.equal((await admin('/api/storage', { method: 'POST', body: { ...shared, name: 'Shared 2' } })).status, 409);
   assert.equal((await admin(`/api/storage/${sharedNode.json.id}`, { method: 'DELETE' })).status, 200);
+});
+
+test('Google failures become actionable messages', () => {
+  const disabled = { response: { data: { error: { code: 403, message: 'Google Drive API has not been used in project 123 before or it is disabled.', errors: [{ reason: 'accessNotConfigured' }] } } } };
+  assert.match(googleProblem(disabled, 'drive'), /Drive API is not enabled/);
+  assert.match(googleProblem({ response: { data: { error: 'invalid_client' } } }, 'login'), /GOOGLE_CLIENT_ID/);
+  assert.match(googleProblem({ response: { data: { error: 'invalid_grant' } } }, 'login'), /try again/);
+  const other = { response: { data: { error: { code: 500, message: 'Backend Error' } } } };
+  assert.equal(googleProblem(other, 'drive'), 'Google Drive error: Backend Error');
+  assert.equal(googleProblem(other, 'login'), '');
+  assert.equal(googleProblem(new Error('boom'), 'login'), '');
 });
 
 test('personal Drives use their own app folder, reusing it when possible', async () => {
