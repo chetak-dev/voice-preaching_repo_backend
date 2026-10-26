@@ -286,7 +286,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
       )}
 
       {filtered.length > 0 && layout === 'grid' && (
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
           {filtered.map(item => (
             <ContentCard key={item.id} item={item} onPreview={openItem} onShare={share} showStatus={scope === 'mine'}
               onBookmark={item.status === 'approved' && !item.parent_id ? toggleBookmark : undefined}

@@ -127,7 +127,7 @@ export function Avatar({ name = '', size = 'md' }) {
 export function Spinner({ label = 'Loading…', variant = 'list', rows = 5 }) {
   if (variant === 'grid') {
     return (
-      <div role="status" aria-label={label} className="grid grid-cols-3 gap-2 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
+      <div role="status" aria-label={label} className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
         {Array.from({ length: 10 }, (_, i) => (
           <div key={i} className="card overflow-hidden">
             <Bone className="aspect-[16/10] rounded-none" />

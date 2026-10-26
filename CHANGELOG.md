@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.2.2 — 2026-10-26
+
+- Phones show 2 cards per row, with the type label, share button and view count visible again.
+
 ## 1.2.1 — 2026-10-26
 
 - Full preview before download: PDFs show every page (also on phones), Word documents show their text, PowerPoint shows each slide, Excel shows each sheet as a table, text files show their content, and videos, audio and YouTube links play inside the preview.
@@ -12,7 +16,7 @@ The version shown in the app (sidebar on desktop, **More** menu on phones) comes
 - Uploads by site admins and org admins are published right away; only member uploads go to the review queue.
 - Thumbnails for every file type: image, video frame, PDF first page, audio cover art, Office documents and text. Existing items get thumbnails when an admin or the uploader opens the library.
 - Preview each file (image, video, audio, PDF, text, Office thumbnail or link) before uploading.
-- Compact cards: 5 per row on laptops, 3 on phones. The save button fills in when an item is saved.
+- Compact cards: 5 per row on laptops, 3 on phones (2 from 1.2.2). The save button fills in when an item is saved.
 - Storage and per-type totals moved to a new **Overview** page.
 - The desktop sidebar expands on hover and collapses when the pointer leaves.
 - Fixed: on phones, the bottom navigation bar disappeared in list view.

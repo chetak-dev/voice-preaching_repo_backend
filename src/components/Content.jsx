@@ -95,7 +95,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
     <article className="card group flex flex-col overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:shadow-pop">
       <button type="button" onClick={() => onPreview(item)} className="relative block aspect-[16/10] w-full overflow-hidden" aria-label={`Preview ${item.title}`}>
         <ContentThumb item={item} className="h-full w-full transition duration-300 group-hover:scale-[1.03]" />
-        <span className="absolute left-1.5 top-1.5 sm:left-2 sm:top-2"><Badge tone={cx(meta.tone, 'bg-white/90 px-1.5 py-0.5 text-[10px] backdrop-blur [&_svg]:h-3 [&_svg]:w-3')} icon={meta.icon}><span className="hidden sm:inline">{meta.label}</span></Badge></span>
+        <span className="absolute left-1.5 top-1.5 sm:left-2 sm:top-2"><Badge tone={cx(meta.tone, 'bg-white/90 px-1.5 py-0.5 text-[10px] backdrop-blur [&_svg]:h-3 [&_svg]:w-3')} icon={meta.icon}><span>{meta.label}</span></Badge></span>
         {item.parts > 0 && (
           <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur">
             <Layers className="h-3 w-3" />+{item.parts}
@@ -107,7 +107,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
         <div className="flex items-start justify-between gap-1">
           <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
           <div className="-mr-1 -mt-0.5 flex shrink-0 items-center">
-            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} className="hidden sm:block" />}
+            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} />}
             {onBookmark && (
               <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
                 className={cx('rounded-md p-1 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
@@ -126,7 +126,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
         <div className="mt-auto flex items-center gap-1.5 pt-1.5 text-[10px] text-slate-500 sm:pt-2 sm:text-[11px]">
           <span className="min-w-0 truncate">{item.uploader}</span>
           <span className="ml-auto flex shrink-0 items-center gap-2">
-            {item.status === 'approved' && <ViewCount value={item.views} className="hidden sm:inline-flex [&_svg]:h-3 [&_svg]:w-3" />}
+            {item.status === 'approved' && <ViewCount value={item.views} className="[&_svg]:h-3 [&_svg]:w-3" />}
             <span className="hidden sm:inline">{timeAgo(item.created_at)}</span>
           </span>
         </div>
