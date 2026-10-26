@@ -174,6 +174,8 @@ test('large uploads arrive in ordered chunks and can be cancelled', async () => 
   assert.equal((await user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 1000) })).status, 400, 'middle chunks must be 256 KB multiples');
   const first = await user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) });
   assert.deepEqual(first.json, { done: false, received: 256 * 1024 });
+  assert.deepEqual((await user(`/api/uploads/${id}`)).json, { done: false, received: 256 * 1024, size }, 'a reopened app learns where to resume');
+  assert.equal((await other(`/api/uploads/${id}`)).status, 404, 'only the uploader can see upload progress');
   const outOfOrder = await user(`/api/uploads/${id}?offset=0`, { method: 'PUT', raw: file.subarray(0, 256 * 1024) });
   assert.equal(outOfOrder.status, 409);
   assert.equal(outOfOrder.json.received, 256 * 1024);
@@ -182,6 +184,7 @@ test('large uploads arrive in ordered chunks and can be cancelled', async () => 
   const replay = await user(`/api/uploads/${id}?offset=${256 * 1024}`, { method: 'PUT', raw: file.subarray(256 * 1024) });
   assert.equal(replay.status, 200);
   assert.equal(replay.json.id, last.json.id);
+  assert.equal((await user(`/api/uploads/${id}`)).json.done, true);
   assert.deepEqual(readFileSync(path.join(dataDir, 'files', id)), file);
   const mine = await user('/api/content?scope=mine');
   assert.equal(mine.json.items.find(item => item.id === last.json.id).size, size);

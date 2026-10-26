@@ -9,6 +9,7 @@ The version shown in the app (sidebar on desktop, **More** menu on phones) comes
 - No upload size limit for any file type; `http://` links are accepted.
 - Search suggestions in the library.
 - Desktop sign-in page shows a short description and feature highlights.
+- Uploads continue in the background with a progress tray on every page. Interrupted uploads (tab closed, phone asleep, connection lost) resume automatically from where they stopped; the screen stays awake while uploading.
 - Personal Google Drives now use limited access (`drive.file`): VOICE creates its own "VOICE Media" folder on Connect and can only access files it uploads, so no Google app verification is needed. Each Google account can be connected once.
 - Privacy Policy and Terms & Conditions pages, linked from sign-in and the app menu.
 - Branded loading screen and skeleton placeholders while pages load.

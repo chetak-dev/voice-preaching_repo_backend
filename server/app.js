@@ -483,6 +483,12 @@ export function createApp(overrides = {}) {
     if (!upload) throw fail(404, 'Upload not found. It may have expired; please start again.');
     return upload;
   };
+  app.get('/api/uploads/:id', h(async (req, res) => {
+    const completed = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ? AND storage_key IS NOT NULL', req.params.id, req.user.id);
+    if (completed) return res.json({ done: true, received: null });
+    const upload = await ownUpload(req);
+    res.json({ done: false, received: upload.completed_key ? upload.size : upload.received, size: upload.size });
+  }));
   app.put('/api/uploads/:id', express.raw({ type: 'application/octet-stream', limit: CHUNK_SIZE + 1024 }), h(async (req, res) => {
     const completed = await db.get('SELECT id, status FROM content WHERE id = ? AND uploader_id = ? AND storage_key IS NOT NULL', req.params.id, req.user.id);
     if (completed) return res.status(200).json({ done: true, id: completed.id, status: completed.status, message: 'Upload was already submitted.' });

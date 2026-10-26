@@ -1,10 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import {
   Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, Plus, Trophy, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
+import {
+  cancelAll as cancelUploads, getJobs as getUploadJobs, isActive as isUploadActive, resumeSaved, subscribe as subscribeUploads,
+} from './uploads.js';
 import { Avatar, Badge, Button, Logo, Modal, ROLE_META, SplashLoader, ToastProvider, cx, useToast } from './components/ui.jsx';
 import { PersistentMediaPlayer, useMediaPlayer } from './components/MediaPlayer.jsx';
+import UploadTray from './components/UploadTray.jsx';
 import Activity from './views/Activity.jsx';
 import Library from './views/Library.jsx';
 import Leaderboard from './views/Leaderboard.jsx';
@@ -74,6 +78,8 @@ function Shell({ user, config, onSignOut }) {
   const isReviewer = allowed('review', user.role);
   const { closePlayer } = useMediaPlayer();
   useEffect(() => () => closePlayer(), [closePlayer]);
+  const uploadJobs = useSyncExternalStore(subscribeUploads, getUploadJobs);
+  const uploading = uploadJobs.filter(isUploadActive).length;
 
   const navigate = useCallback(id => { window.location.hash = `/${id}`; setSheetOpen(false); window.scrollTo(0, 0); }, []);
   useEffect(() => {
@@ -86,6 +92,10 @@ function Shell({ user, config, onSignOut }) {
     if (isReviewer) api('/overview').then(data => setPending(data.pending)).catch(() => {});
   }, [isReviewer]);
   useEffect(() => { refreshPending(); }, [refreshPending, view]);
+  useEffect(() => {
+    resumeSaved(user.id, job => { if (job?.status === 'done') refreshPending(); })
+      .then(count => { if (count) toast(`Resuming ${count === 1 ? '1 unfinished upload' : `${count} unfinished uploads`}.`); });
+  }, [user.id, refreshPending, toast]);
   const [points, setPoints] = useState(null);
   useEffect(() => { api('/leaderboard').then(data => setPoints(data.me.points)).catch(() => {}); }, [view]);
 
@@ -201,6 +211,7 @@ function Shell({ user, config, onSignOut }) {
       <div className="lg:pl-20">
         <main key={active} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-10">{page}</main>
       </div>
+      {active !== 'upload' && <UploadTray />}
 
       {/* Mobile bottom navigation */}
       <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-white/95 shadow-nav backdrop-blur lg:hidden" aria-label="Primary">
@@ -285,6 +296,11 @@ function Shell({ user, config, onSignOut }) {
           </>
         )}>
         <p className="text-sm text-slate-600">{user.email}</p>
+        {uploading > 0 && (
+          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
+            {uploading === 1 ? '1 upload is' : `${uploading} uploads are`} still in progress and will be cancelled.
+          </p>
+        )}
       </Modal>
     </div>
   );
@@ -317,6 +333,7 @@ function Root() {
   }, [state.loading, state.user, toast]);
 
   async function signOut() {
+    await cancelUploads();
     await api('/auth/logout', { method: 'POST' }).catch(() => {});
     setState(current => ({ ...current, user: null }));
     window.history.replaceState(null, '', '/');

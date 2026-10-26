@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Copy, FileUp, Layers, Lightbulb, Link2, Plus, UploadCloud, X } from 'lucide-react';
-import { api, uploadFile } from '../api.js';
+import { AlertCircle, CheckCircle2, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, Plus, UploadCloud, X } from 'lucide-react';
+import { api } from '../api.js';
+import { enqueue, forget } from '../uploads.js';
+import UploadTray from '../components/UploadTray.jsx';
 import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
 
 const fileTypeOf = file => ['image', 'video', 'audio'].find(type => file.type.startsWith(`${type}/`)) || 'doc';
@@ -34,14 +36,15 @@ function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, 
               <Copy className="h-3.5 w-3.5" /> Use this description for all
             </button>
           )}
-          {item.status === 'uploading' && (
+          {(item.status === 'uploading' || item.status === 'waiting') && (
             <div className="flex items-center gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
-                <div className="h-full rounded-full bg-voice transition-all" style={{ width: `${item.progress}%` }} />
+                <div className={cx('h-full rounded-full transition-all', item.status === 'waiting' ? 'bg-amber-400' : 'bg-voice')} style={{ width: `${item.progress}%` }} />
               </div>
               <span className="w-9 text-right text-xs tabular-nums text-slate-500">{item.progress}%</span>
             </div>
           )}
+          {item.status === 'waiting' && <p className="flex items-center gap-1.5 text-xs text-amber-700"><CloudOff className="h-3.5 w-3.5 shrink-0" />Waiting for connection… it will continue automatically.</p>}
           {item.status === 'error' && <p className="flex items-center gap-1.5 text-xs text-rose-700"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{item.error}</p>}
         </div>
         {done ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" aria-label="Submitted" /> : !locked && (
@@ -73,12 +76,8 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
 
   useEffect(() => { if (isAdmin) api('/storage').then(setStorage).catch(() => {}); }, [isAdmin]);
 
-  useEffect(() => {
-    if (!busy) return undefined;
-    const warn = event => { event.preventDefault(); event.returnValue = ''; };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [busy]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const update = (key, patch) => setItems(list => list.map(item => (item.key === key ? { ...item, ...patch } : item)));
 
@@ -115,25 +114,22 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     if (useShared ? !shared.title.trim() : pending.some(item => !item.title.trim())) { setError(useShared ? 'Enter a title.' : 'Every item needs a title.'); return; }
     setBusy(true);
     setError('');
-    let ok = 0;
-    let failed = 0;
-    for (const item of pending) {
-      update(item.key, { status: 'uploading', progress: 0, error: '' });
-      try {
-        const source = useShared ? shared : item;
-        const fields = { title: source.title.trim(), description: source.description.trim(), ...(parent ? { parentId: parent.id } : {}) };
-        if (item.kind === 'file') {
-          await uploadFile(item.file, { ...fields, ...(isAdmin ? { targetDriveId: target } : {}) }, progress => update(item.key, { progress }));
-        } else {
-          await api('/content', { method: 'POST', body: { ...fields, url: item.url } });
-        }
-        update(item.key, { status: 'done', progress: 100 });
-        ok += 1;
-      } catch (err) {
-        update(item.key, { status: 'error', error: err.message });
-        failed += 1;
-      }
-    }
+    const results = await enqueue(pending.map(item => {
+      const source = useShared ? shared : item;
+      const fields = { title: source.title.trim(), description: source.description.trim(), ...(parent ? { parentId: parent.id } : {}) };
+      update(item.key, { status: 'ready', progress: 0, error: '' });
+      return {
+        key: item.key, kind: item.kind, file: item.file, url: item.url, title: fields.title,
+        fields: item.kind === 'file' && isAdmin ? { ...fields, targetDriveId: target } : fields,
+        onUpdate: ({ status, progress, error: message }) => update(item.key, {
+          status: status === 'queued' ? 'ready' : status, progress, error: status === 'error' ? message : '',
+        }),
+      };
+    }));
+    const ok = results.filter(result => result.status === 'done').length;
+    const failed = results.length - ok;
+    if (!mounted.current) return;
+    forget(results.map(result => result.id));
     setBusy(false);
     if (ok) onChanged?.();
     if (failed) {
@@ -167,11 +163,12 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   const destinations = storage ? [storage.local, ...storage.nodes].filter(node => node?.connected) : [];
   const remaining = items.filter(item => item.status !== 'done');
   const totalBytes = remaining.reduce((sum, item) => sum + (item.file?.size || 0), 0);
-  const current = items.findIndex(item => item.status === 'uploading');
+  const current = items.findIndex(item => item.status === 'uploading' || item.status === 'waiting');
 
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader title={parent ? 'Add to upload' : 'Contribute'} />
+      {!busy && <UploadTray inline />}
 
       {parent && (
         <div className="mb-4 flex items-center gap-3 rounded-xl bg-white p-3 ring-1 ring-brand-200">
@@ -288,8 +285,9 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
 
           {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
         </div>
-        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
-          <Button variant="secondary" onClick={() => navigate('library')} disabled={busy}>Cancel</Button>
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
+          {busy && <p className="mr-auto text-xs text-slate-500">You can leave this page. Uploads continue in the background.</p>}
+          {!busy && <Button variant="secondary" onClick={() => navigate('library')}>Cancel</Button>}
           <Button type="submit" icon={UploadCloud} loading={busy} disabled={!remaining.length}>
             {busy ? 'Uploading…' : remaining.length > 1 ? `Upload ${remaining.length} items` : 'Upload'}
           </Button>

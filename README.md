@@ -65,6 +65,8 @@ Each free Google account offers 15 GB. The platform treats every connected Drive
 
 **Large files:** the browser sends files in 4 MB chunks, which the server streams straight into Google Drive's resumable upload. This keeps every request within serverless limits, so there is no file size limit (only the free space on your Drives).
 
+**Background uploads:** uploads run in the background, so people can keep browsing while a progress tray shows status. Files waiting to upload are kept in the browser's storage on the device. If the tab is closed, the phone suspends it, or the connection drops, the upload continues from the last finished chunk when VOICE is opened again (within 24 hours) or the connection returns. Signing out cancels pending uploads and removes those saved files from the device.
+
 **Workspace Shared Drives** are also supported: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key file (or paste the key JSON into `GOOGLE_SERVICE_ACCOUNT_JSON`), add the service account as a member of the Shared Drive, and choose *Workspace Shared Drive* (with the Shared Drive folder link) when adding storage.
 
 Files are always served through the API after permission checks, so Drive folders do not need to be shared publicly.
