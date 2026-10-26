@@ -2,6 +2,11 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.2.1 — 2026-10-26
+
+- Full preview before download: PDFs show every page (also on phones), Word documents show their text, PowerPoint shows each slide, Excel shows each sheet as a table, text files show their content, and videos, audio and YouTube links play inside the preview.
+- Removed the preview from the upload screen; files waiting to upload still show a small thumbnail.
+
 ## 1.2.0 — 2026-10-26
 
 - Uploads by site admins and org admins are published right away; only member uploads go to the review queue.

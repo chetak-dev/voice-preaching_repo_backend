@@ -61,12 +61,17 @@ function fromVideo(blob) {
 }
 
 let pdfjs;
-async function fromPdf(blob) {
+export async function loadPdfjs() {
   if (!pdfjs) {
     const [lib, worker] = await Promise.all([import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url')]);
     lib.GlobalWorkerOptions.workerSrc = worker.default;
     pdfjs = lib;
   }
+  return pdfjs;
+}
+
+async function fromPdf(blob) {
+  await loadPdfjs();
   const task = pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false });
   const doc = await task.promise;
   try {
@@ -180,7 +185,7 @@ async function fromOffice(blob) {
     return paper(texts.slice(1, 20), { title: texts[0] || 'Presentation', accent: '#ea580c' });
   }
   const sheet = decode('xl/sharedStrings.xml');
-  if (sheet) return paper([xmlText(sheet, 't').slice(0, 60).map(t => t.textContent).join(' Â· ')], { title: 'Spreadsheet', accent: '#16a34a' });
+  if (sheet) return paper([xmlText(sheet, 't').slice(0, 60).map(t => t.textContent).join(' \u00b7 ')], { title: 'Spreadsheet', accent: '#16a34a' });
   return null;
 }
 

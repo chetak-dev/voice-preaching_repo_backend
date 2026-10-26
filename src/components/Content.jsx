@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Bookmark, Download, ExternalLink, Eye, Layers, Play, Plus, Share2 } from 'lucide-react';
 import { api, fileUrl, thumbnailUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
+import FullPreview from './FullPreview.jsx';
 import { Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -201,27 +202,18 @@ export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo })
   const { openPlayer } = useMediaPlayer();
   if (!item) return null;
   const meta = TYPE_META[item.type] || TYPE_META.link;
-  const src = fileUrl(item.id, true);
   const isMedia = item.type === 'audio' || item.type === 'video';
-  let body;
-  if (item.type === 'image') body = <img src={src} alt={item.title} className="mx-auto max-h-[60vh] rounded-lg object-contain" />;
-  else if (isMedia) body = <div className="rounded-lg bg-slate-50 p-6 text-center"><p className="text-sm text-slate-600">Open this {item.type} in the persistent player to keep listening while you browse.</p>
-    <Button className="mt-4" onClick={() => openPlayer(item)}>{item.type === 'video' ? 'Play video' : 'Listen now'}</Button></div>;
-  else if (item.type === 'doc' && ['application/pdf', 'text/plain'].includes(item.mime)) body = <iframe title={item.title} src={src} className="h-[60vh] w-full rounded-lg border border-slate-200" />;
-  else if (item.type !== 'link') body = <div className="flex flex-col items-center gap-3 rounded-lg bg-slate-50 p-8 text-center"><meta.icon className="h-10 w-10 text-slate-400" strokeWidth={1.5} />
-    <p className="break-all text-sm font-medium text-slate-700">{item.original_name || item.title}</p></div>;
-  else body = <div className="rounded-lg border border-slate-200 bg-slate-50 p-5"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">External link</p>
-    <p className="mt-1 break-all text-sm text-slate-800">{item.url}</p></div>;
   return (
     <Modal open onClose={onClose} title={item.title} size="lg" footer={(
       <>
         {onShare && canShare(item) && <Button variant="secondary" icon={Share2} onClick={() => onShare(item)}>Share</Button>}
+        {isMedia && <Button variant="secondary" icon={Play} onClick={() => { openPlayer(item); onClose(); }}>Keep playing while browsing</Button>}
         {actions}
         {item.type === 'link' ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
           : <Button href={fileUrl(item.id)} icon={Download}>Download</Button>}
       </>
     )}>
-      {body}
+      <FullPreview item={item} />
       <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-5">
         <div><dt className="text-slate-500">Type</dt><dd className="font-medium text-slate-900">{meta.label}</dd></div>
         <div><dt className="text-slate-500">Submitted by</dt><dd className="truncate font-medium text-slate-900">{item.uploader}</dd></div>
