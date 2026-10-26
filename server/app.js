@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { google } from 'googleapis';
 import { openDatabase, audit, hashPassword, verifyPassword } from './db.js';
-import { CHUNK_SIZE, createStorage, driveClient, encryptToken, isConnected, oauthClient, refreshQuota } from './storage.js';
+import { CHUNK_SIZE, DRIVE_FILE_SCOPE, createStorage, driveClient, encryptToken, ensureAppFolder, isConnected, oauthClient, refreshQuota } from './storage.js';
 
 const TYPES = ['image', 'video', 'audio', 'doc', 'link'];
 const FILE_TYPES = TYPES.filter(type => type !== 'link');
@@ -211,7 +211,7 @@ export function createApp(overrides = {}) {
       state, code_challenge: createHash('sha256').update(verifier).digest('base64url'),
       code_challenge_method: 'S256',
       scope: purpose === 'drive'
-        ? ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive']
+        ? ['openid', 'email', 'profile', DRIVE_FILE_SCOPE]
         : ['openid', 'email', 'profile'],
       access_type: purpose === 'drive' ? 'offline' : 'online',
       prompt: purpose === 'drive' ? 'consent' : 'select_account',
@@ -239,16 +239,21 @@ export function createApp(overrides = {}) {
       if (record.purpose === 'drive') {
         if (req.user?.id !== record.user_id || req.user.role !== 'site_admin') throw fail(403, 'Site administrator access is required.');
         if (!tokens.refresh_token) throw fail(400, 'No offline access token was returned. Reconnect and grant consent.');
+        if (!String(tokens.scope || '').split(' ').includes(DRIVE_FILE_SCOPE)) {
+          throw fail(400, 'Google Drive access was not granted. Click Connect again and tick the Google Drive permission.');
+        }
         client.setCredentials(tokens);
         const node = await db.get('SELECT * FROM drives WHERE id = ?', record.node_id);
         if (!node) throw fail(404, 'Storage destination not found.');
-        const { data: folder } = await google.drive({ version: 'v3', auth: client })
-          .files.get({ fileId: node.folder_id, fields: 'id,mimeType,capabilities(canAddChildren)', supportsAllDrives: true });
-        if (folder.mimeType !== 'application/vnd.google-apps.folder' || !folder.capabilities?.canAddChildren) {
-          throw fail(400, 'The account cannot upload to this folder. Check its folder ID and access.');
+        const other = await db.get("SELECT name FROM drives WHERE kind = 'oauth' AND account_email = ? AND id != ?", email, node.id);
+        if (other) throw fail(409, `${email} is already connected as "${other.name}". Use a different Google account for each Drive.`);
+        const holdsFiles = await db.get('SELECT 1 AS found FROM content WHERE storage_node = ? LIMIT 1', node.id);
+        if (holdsFiles && node.account_email && node.account_email !== email) {
+          throw fail(409, `This Drive's files are stored in ${node.account_email}. Reconnect with that Google account.`);
         }
-        await db.run('UPDATE drives SET refresh_token = ?, account_email = ? WHERE id = ?',
-          encryptToken(tokens.refresh_token, config.encryptionKey), email, record.node_id);
+        const folderId = await ensureAppFolder(google.drive({ version: 'v3', auth: client }), node.folder_id);
+        await db.run('UPDATE drives SET refresh_token = ?, account_email = ?, folder_id = ?, quota_checked_at = NULL WHERE id = ?',
+          encryptToken(tokens.refresh_token, config.encryptionKey), email, folderId, record.node_id);
         await audit(db, req.user.id, 'Connected Google Drive', node.name);
         return res.redirect(`${config.origin}/?connected=1`);
       }
@@ -710,10 +715,15 @@ export function createApp(overrides = {}) {
   };
   app.post('/api/storage', siteAdmin, h(async (req, res) => {
     const name = text(req.body.name, 'Storage name', 100);
-    const folderId = text(req.body.folderId, 'Folder ID', 200);
-    if (!/^[A-Za-z0-9_-]+$/.test(folderId)) throw fail(400, 'Enter a Google Drive folder ID, not its full URL.');
     if (!['oauth', 'service'].includes(req.body.kind)) throw fail(400, 'Choose a storage connection type.');
-    if (await db.get('SELECT 1 AS found FROM drives WHERE folder_id = ?', folderId)) throw fail(409, 'This folder is already registered.');
+    // Personal Drives get their own "VOICE Media" folder when connected; only Shared Drives need a folder up front.
+    let folderId = '';
+    if (req.body.kind === 'service') {
+      folderId = text(req.body.folderId, 'Folder ID', 200);
+      if (!/^[A-Za-z0-9_-]+$/.test(folderId)) throw fail(400, 'Enter a Google Drive folder ID, not its full URL.');
+      if (await db.get('SELECT 1 AS found FROM drives WHERE folder_id = ?', folderId)) throw fail(409, 'This folder is already registered.');
+    }
+    if (await db.get('SELECT 1 AS found FROM drives WHERE lower(name) = lower(?)', name)) throw fail(409, 'A Drive with this name already exists.');
     const id = randomUUID();
     await db.run('INSERT INTO drives (id,name,folder_id,kind,types,created_at) VALUES (?,?,?,?,?,?)',
       id, name, folderId, req.body.kind, JSON.stringify(FILE_TYPES), new Date().toISOString());

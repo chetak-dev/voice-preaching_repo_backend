@@ -56,6 +56,30 @@ export function driveClient(node, config) {
   return google.drive({ version: 'v3', auth: authFor(node, config) });
 }
 
+// Personal Drives only grant `drive.file` (files this app creates), which needs no Google verification.
+export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+export const APP_FOLDER = 'VOICE Media';
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+
+/** Returns the id of the app's own upload folder: the current one if still usable, else an existing or new "VOICE Media" folder. */
+export async function ensureAppFolder(drive, currentId) {
+  if (currentId) {
+    try {
+      const { data } = await drive.files.get({ fileId: currentId, fields: 'id,mimeType,trashed,capabilities(canAddChildren)' });
+      if (data.mimeType === FOLDER_MIME && !data.trashed && data.capabilities?.canAddChildren) return data.id;
+    } catch {
+      // Not visible to this app or account any more; fall through and use a fresh folder.
+    }
+  }
+  const { data: found } = await drive.files.list({
+    q: `name = '${APP_FOLDER}' and mimeType = '${FOLDER_MIME}' and 'root' in parents and trashed = false`,
+    fields: 'files(id)', pageSize: 1, spaces: 'drive',
+  });
+  if (found.files?.length) return found.files[0].id;
+  const { data } = await drive.files.create({ requestBody: { name: APP_FOLDER, mimeType: FOLDER_MIME }, fields: 'id' });
+  return data.id;
+}
+
 async function accessToken(node, config) {
   const result = await authFor(node, config).getAccessToken();
   const token = typeof result === 'string' ? result : result?.token;

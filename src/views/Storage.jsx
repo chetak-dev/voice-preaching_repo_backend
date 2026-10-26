@@ -74,7 +74,8 @@ export default function Storage() {
   }
 
   async function add() {
-    const ok = await run('add', () => api('/storage', { method: 'POST', body: { ...form, folderId: folderIdFrom(form.folderId) } }), 'Storage destination added.');
+    const body = form.kind === 'service' ? { ...form, folderId: folderIdFrom(form.folderId) } : { name: form.name, kind: form.kind };
+    const ok = await run('add', () => api('/storage', { method: 'POST', body }), 'Drive added. Click Connect to finish.');
     if (ok) setAdding(false);
   }
 
@@ -106,7 +107,14 @@ export default function Storage() {
                 <div className="mt-4"><QuotaBar usage={node.quotaUsage} limit={node.quotaLimit} /></div>
                 <dl className="mt-4 grid grid-cols-2 gap-2 text-xs">
                   <div><dt className="text-slate-500">Files stored</dt><dd className="font-medium text-slate-800">{node.fileCount}</dd></div>
-                  <div className="min-w-0"><dt className="text-slate-500">Folder ID</dt><dd className="truncate font-mono text-slate-800" title={node.folderId}>{node.folderId}</dd></div>
+                  <div className="min-w-0">
+                    <dt className="text-slate-500">Folder</dt>
+                    <dd className="truncate font-medium text-slate-800">
+                      {node.folderId
+                        ? <a className="text-brand-700 hover:underline" href={`https://drive.google.com/drive/folders/${node.folderId}`} target="_blank" rel="noreferrer">{node.kind === 'oauth' ? 'VOICE Media' : 'Open folder'}</a>
+                        : <span className="text-slate-400">Created on connect</span>}
+                    </dd>
+                  </div>
                 </dl>
                 <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
                   {node.kind === 'oauth' && (
@@ -156,19 +164,13 @@ export default function Storage() {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setAdding(false)}>Cancel</Button>
-            <Button icon={Plus} loading={busy === 'add'} disabled={!form.name.trim() || !form.folderId.trim()} onClick={add}>Add Drive</Button>
+            <Button icon={Plus} loading={busy === 'add'} disabled={!form.name.trim() || (form.kind === 'service' && !form.folderId.trim())} onClick={add}>Add Drive</Button>
           </>
         )}>
         <div className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label" htmlFor="drive-name">Display name</label>
-              <input id="drive-name" className="input" maxLength={100} autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-            </div>
-            <div>
-              <label className="label" htmlFor="drive-folder">Folder link or ID</label>
-              <input id="drive-folder" className="input font-mono text-xs" placeholder="https://drive.google.com/drive/folders/…" value={form.folderId} onChange={e => setForm({ ...form, folderId: e.target.value })} />
-            </div>
+          <div>
+            <label className="label" htmlFor="drive-name">Display name</label>
+            <input id="drive-name" className="input" maxLength={100} autoFocus placeholder="e.g. Media Drive 1" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           </div>
           <div>
             <span className="label">Connection type</span>
@@ -189,6 +191,17 @@ export default function Storage() {
               ))}
             </div>
           </div>
+          {form.kind === 'oauth' ? (
+            <p className="rounded-xl bg-brand-50/70 px-4 py-3 text-sm text-slate-600 ring-1 ring-inset ring-brand-100">
+              After adding, click <strong className="text-slate-800">Connect</strong> and sign in with the Google account for this Drive.
+              VOICE creates a <strong className="text-slate-800">VOICE Media</strong> folder there and can only access the files it uploads.
+            </p>
+          ) : (
+            <div>
+              <label className="label" htmlFor="drive-folder">Shared Drive folder link or ID</label>
+              <input id="drive-folder" className="input font-mono text-xs" placeholder="https://drive.google.com/drive/folders/…" value={form.folderId} onChange={e => setForm({ ...form, folderId: e.target.value })} />
+            </div>
+          )}
         </div>
       </Modal>
     </div>

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from './app.js';
 import { hashPassword } from './db.js';
-import { boundedRange } from './storage.js';
+import { APP_FOLDER, boundedRange, ensureAppFolder } from './storage.js';
 
 const ORIGIN = 'http://localhost:5173';
 const TEST_PASSWORD = 'test-password';
@@ -355,14 +355,41 @@ test('storage management is restricted to site admins', async () => {
 
 test('drives can be registered before Google is configured and accept every file type', async () => {
   const admin = await signIn('site_admin');
-  const body = { name: 'Media Drive 1', folderId: '1_bvFEEuo__VMC85oVlk49a3f6XUTjIH3', kind: 'oauth' };
-  const created = await admin('/api/storage', { method: 'POST', body });
+  const created = await admin('/api/storage', { method: 'POST', body: { name: 'Media Drive 1', kind: 'oauth' } });
   assert.equal(created.status, 201);
-  assert.equal((await admin('/api/storage', { method: 'POST', body })).status, 409);
+  assert.equal((await admin('/api/storage', { method: 'POST', body: { name: 'media drive 1', kind: 'oauth' } })).status, 409);
   const node = (await admin('/api/storage')).json.nodes.find(n => n.id === created.json.id);
   assert.equal(node.connected, false);
+  assert.equal(node.folderId, '');
   assert.equal('types' in node, false);
   assert.equal((await admin(`/api/storage/${node.id}`, { method: 'DELETE' })).status, 200);
+
+  assert.equal((await admin('/api/storage', { method: 'POST', body: { name: 'Shared', kind: 'service' } })).status, 400);
+  const shared = { name: 'Shared', kind: 'service', folderId: '1_bvFEEuo__VMC85oVlk49a3f6XUTjIH3' };
+  const sharedNode = await admin('/api/storage', { method: 'POST', body: shared });
+  assert.equal(sharedNode.status, 201);
+  assert.equal((await admin('/api/storage', { method: 'POST', body: { ...shared, name: 'Shared 2' } })).status, 409);
+  assert.equal((await admin(`/api/storage/${sharedNode.json.id}`, { method: 'DELETE' })).status, 200);
+});
+
+test('personal Drives use their own app folder, reusing it when possible', async () => {
+  const calls = [];
+  const fake = ({ getOk = false, listed = [] } = {}) => ({
+    files: {
+      get: async ({ fileId }) => {
+        calls.push(['get', fileId]);
+        if (!getOk) throw new Error('not found');
+        return { data: { id: fileId, mimeType: 'application/vnd.google-apps.folder', trashed: false, capabilities: { canAddChildren: true } } };
+      },
+      list: async ({ q }) => { calls.push(['list', q]); return { data: { files: listed } }; },
+      create: async ({ requestBody }) => { calls.push(['create', requestBody.name]); return { data: { id: 'new-folder' } }; },
+    },
+  });
+  assert.equal(await ensureAppFolder(fake({ getOk: true }), 'kept'), 'kept');
+  assert.equal(await ensureAppFolder(fake({ listed: [{ id: 'found' }] }), 'gone'), 'found');
+  assert.equal(await ensureAppFolder(fake(), ''), 'new-folder');
+  assert.deepEqual(calls.at(-1), ['create', APP_FOLDER]);
+  assert.ok(calls.some(([kind, q]) => kind === 'list' && q.includes(`name = '${APP_FOLDER}'`)));
 });
 
 test('serverless hosts refuse file uploads until a Google Drive is connected', async () => {
