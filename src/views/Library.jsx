@@ -1,12 +1,15 @@
-import React, { useMemo, useState } from 'react';
-import { Bookmark, BookmarkCheck, CornerDownLeft, Eye, FolderOpen, HardDrive, History, LayoutGrid, Layers, List, Search, Trash2, UploadCloud, User } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Bookmark, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Search, Trash2, UploadCloud, User } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
 import { useMediaPlayer } from '../components/MediaPlayer.jsx';
 import { useEffect, useRef } from 'react';
 import {
-  Badge, Button, EmptyState, ErrorBanner, PageHeader, STATUS_META, Spinner, TYPE_META, cx, formatBytes, timeAgo, useAsync, useToast,
+  Badge, Button, EmptyState, ErrorBanner, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useAsync, useToast,
 } from '../components/ui.jsx';
+import { LIBRARY_TYPE_KEY } from './Overview.jsx';
+import { onThumbnail } from '../uploads.js';
+import { backfillThumbnails } from '../thumbnails.js';
 
 function formatResumeTime(value) {
   const seconds = Math.max(0, Math.floor(Number(value) || 0));
@@ -17,49 +20,6 @@ function formatResumeTime(value) {
 }
 
 const TITLES = { library: 'Library', saved: 'Saved', mine: 'My submissions' };
-
-function TypeTile({ type, info, active, onClick }) {
-  const meta = TYPE_META[type];
-  return (
-    <button type="button" onClick={onClick}
-      className={cx('card flex items-center gap-3 p-3 text-left transition hover:shadow-md active:scale-[0.98]', active && 'ring-2 ring-brand-500')}>
-      <div className={cx('flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br shadow-sm', meta.tile)}><meta.icon className="h-5 w-5" /></div>
-      <div className="min-w-0">
-        <p className="truncate text-xs font-medium text-slate-500">{meta.plural}</p>
-        <p className="truncate text-base font-bold leading-tight text-slate-900">
-          {type === 'link' ? info.files : formatBytes(info.bytes)}
-        </p>
-        <p className="truncate text-[11px] text-slate-400">{type === 'link' ? (info.files === 1 ? 'link' : 'links') : `${info.files} ${info.files === 1 ? 'item' : 'items'}`}</p>
-      </div>
-    </button>
-  );
-}
-
-function StorageCard({ storage }) {
-  const hasQuota = storage.total != null;
-  const percent = hasQuota && storage.total > 0 ? Math.min(100, Math.round((storage.used / storage.total) * 100)) : 0;
-  return (
-    <div className="card flex items-center gap-3 p-3 2xl:col-span-2">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-600 to-slate-800 text-white shadow-sm"><HardDrive className="h-5 w-5" /></div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="text-sm font-semibold text-slate-900">Storage</p>
-          <p className="truncate text-xs text-slate-500">{storage.drives} {storage.drives === 1 ? 'Drive' : 'Drives'}</p>
-        </div>
-        {hasQuota ? (
-          <>
-            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div className={cx('h-full rounded-full', percent > 90 ? 'bg-rose-500' : percent > 75 ? 'bg-amber-500' : 'bg-voice')} style={{ width: `${percent}%` }} />
-            </div>
-            <p className="mt-1 truncate text-xs text-slate-500">{formatBytes(Math.max(0, storage.total - storage.used))} free of {formatBytes(storage.total)}</p>
-          </>
-        ) : (
-          <p className="mt-0.5 truncate text-xs text-slate-500">{formatBytes(storage.content)} used</p>
-        )}
-      </div>
-    </div>
-  );
-}
 
 const RECENT_KEY = 'voice.recentSearches';
 const loadRecent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
@@ -179,9 +139,14 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   const toast = useToast();
   const home = scope === 'library';
   const { data, loading, error, reload } = useAsync(() => api(`/content?scope=${scope}`), [scope]);
-  const overview = useAsync(() => (home ? api('/overview') : Promise.resolve(null)), [home]);
   const [query, setQuery] = useState('');
-  const [type, setType] = useState('all');
+  const [type, setType] = useState(() => {
+    try {
+      const picked = sessionStorage.getItem(LIBRARY_TYPE_KEY);
+      sessionStorage.removeItem(LIBRARY_TYPE_KEY);
+      return home && TYPE_META[picked] ? picked : 'all';
+    } catch { return 'all'; }
+  });
   const [status, setStatus] = useState('all');
   const [layout, setLayout] = useState('grid');
   const [preview, setPreview] = useState(null);
@@ -192,6 +157,14 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   const sharedOpenRef = useRef(null);
   const continueItem = home ? items.find(item => item.id === lastContentId && ['audio', 'video'].includes(item.type) && item.visibility !== 'private') : null;
   const continueProgress = continueItem ? progressById[continueItem.id] : null;
+
+  const markThumb = useCallback(id => setOverrides(current => ({ ...current, [id]: { ...current[id], has_thumb: 1 } })), []);
+  useEffect(() => onThumbnail(markThumb), [markThumb]);
+  useEffect(() => {
+    if (!data) return undefined;
+    const canSet = item => item.uploader_id === user.id || ['site_admin', 'org_admin'].includes(user.role);
+    return backfillThumbnails(data.items.filter(canSet), markThumb);
+  }, [data, user, markThumb]);
 
   useEffect(() => {
     if (!sharedContentId || !home || !data || sharedOpenRef.current === sharedContentId) return;
@@ -247,22 +220,11 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   }
 
   const canDelete = item => user.role === 'site_admin' || (item.uploader_id === user.id && item.status !== 'approved');
-  const stats = overview.data;
 
   return (
     <div>
       <PageHeader title={TITLES[scope]}
         actions={<Button icon={UploadCloud} onClick={() => navigate('upload')} className="hidden lg:inline-flex">Contribute</Button>} />
-
-      {home && stats?.types && (
-        <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-7" aria-label="Library summary">
-          {Object.keys(TYPE_META).map(key => (
-            <TypeTile key={key} type={key} info={stats.types[key] || { files: 0, bytes: 0 }} active={type === key}
-              onClick={() => setType(current => (current === key ? 'all' : key))} />
-          ))}
-          {stats.storage && <StorageCard storage={stats.storage} />}
-        </section>
-      )}
 
       {continueItem && (
         <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-brand-100 bg-brand-50 p-4 sm:flex-row sm:items-center sm:justify-between" aria-label="Continue listening">
@@ -324,7 +286,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
       )}
 
       {filtered.length > 0 && layout === 'grid' && (
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
           {filtered.map(item => (
             <ContentCard key={item.id} item={item} onPreview={openItem} onShare={share} showStatus={scope === 'mine'}
               onBookmark={item.status === 'approved' && !item.parent_id ? toggleBookmark : undefined}
@@ -345,7 +307,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                   <ContentThumb item={item} className="h-full w-full [&_svg]:h-5 [&_svg]:w-5" />
                 </button>
                 <div className="min-w-0 flex-1">
-                  <button type="button" onClick={() => openItem(item)} className="block truncate text-left text-sm font-medium text-slate-900 hover:text-brand-700">{item.title}</button>
+                  <button type="button" onClick={() => openItem(item)} className="block w-full truncate text-left text-sm font-medium text-slate-900 hover:text-brand-700">{item.title}</button>
                   <p className="flex items-center gap-1.5 truncate text-xs text-slate-500">
                     <span className="truncate">{item.parent_title ? `Added to: ${item.parent_title}` : `${item.uploader} · ${timeAgo(item.created_at)}`}</span>
                     {item.parts > 0 && <span className="inline-flex shrink-0 items-center gap-1">· <Layers className="h-3.5 w-3.5" />+{item.parts}</span>}
@@ -358,9 +320,9 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                 {canShare(item) && <ShareButton item={item} onShare={share} className="shrink-0 p-2" />}
                 {item.status === 'approved' && !item.parent_id && (
                   <button type="button" onClick={() => toggleBookmark(item)}
-                    aria-label={item.bookmarked ? 'Remove from saved' : 'Save'}
-                    className={cx('shrink-0 rounded-md p-2 transition', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
-                    {item.bookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+                    aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
+                    className={cx('shrink-0 rounded-md p-2 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
+                    <Bookmark className="h-4 w-4" fill={item.bookmarked ? 'currentColor' : 'none'} />
                   </button>
                 )}
                 <Badge tone={meta.tone} icon={meta.icon} className="hidden w-24 justify-center sm:inline-flex">{meta.label}</Badge>

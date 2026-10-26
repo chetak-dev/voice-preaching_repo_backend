@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Bookmark, BookmarkCheck, Download, ExternalLink, Eye, Layers, Play, Plus, Share2 } from 'lucide-react';
-import { api, fileUrl } from '../api.js';
+import { Bookmark, Download, ExternalLink, Eye, Layers, Play, Plus, Share2 } from 'lucide-react';
+import { api, fileUrl, thumbnailUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
-import { Avatar, Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
+import { Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
 
@@ -43,18 +43,47 @@ export function ShareButton({ item, onShare, className }) {
   );
 }
 
+export const youtubeId = url => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^(www\.|m\.)/, '');
+    if (host === 'youtu.be') return parsed.pathname.slice(1).split('/')[0] || null;
+    if (host === 'youtube.com' || host === 'music.youtube.com') {
+      if (parsed.pathname === '/watch') return parsed.searchParams.get('v');
+      const match = parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{6,})/);
+      return match?.[1] || null;
+    }
+  } catch { /* not a URL */ }
+  return null;
+};
+
 export function ContentThumb({ item, className }) {
   const meta = TYPE_META[item.type] || TYPE_META.link;
-  const [failed, setFailed] = useState(false);
-  if (item.type === 'image' && !failed) {
-    return <img src={fileUrl(item.id, true)} alt="" loading="lazy" onError={() => setFailed(true)} className={cx('object-cover', className)} />;
+  const [failure, setFailure] = useState({ key: '', count: 0 });
+  // Sources in order of preference: stored thumbnail, then a direct snapshot of the media.
+  const sources = [];
+  if (item.has_thumb) sources.push({ kind: 'img', src: thumbnailUrl(item.id) });
+  if (item.type === 'image') sources.push({ kind: 'img', src: fileUrl(item.id, true) });
+  if (item.type === 'video') sources.push({ kind: 'video', src: `${fileUrl(item.id, true)}#t=1` });
+  const yt = item.type === 'link' && youtubeId(item.url);
+  if (yt) sources.push({ kind: 'img', src: `https://img.youtube.com/vi/${encodeURIComponent(yt)}/hqdefault.jpg` });
+  const key = sources.map(entry => entry.src).join('|');
+  const failed = failure.key === key ? failure.count : 0;
+  const fail = () => setFailure({ key, count: failed + 1 });
+  const source = sources[failed];
+  if (source?.kind === 'img') {
+    return <img key={source.src} src={source.src} alt="" loading="lazy" onError={fail} className={cx('bg-slate-100 object-cover', className)} />;
+  }
+  if (source?.kind === 'video') {
+    return <video key={source.src} src={source.src} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" onError={fail}
+      className={cx('pointer-events-none bg-slate-900 object-cover', className)} />;
   }
   const Icon = meta.icon;
   const host = item.type === 'link' ? hostOf(item.url) : '';
   return (
-    <div className={cx('flex flex-col items-center justify-center gap-2 bg-gradient-to-br', meta.tile, className)}>
-      <Icon className="h-10 w-10 opacity-90 drop-shadow" strokeWidth={1.5} />
-      {host && <span className="max-w-[85%] truncate text-xs font-semibold text-white/90">{host}</span>}
+    <div className={cx('flex flex-col items-center justify-center gap-1.5 bg-gradient-to-br', meta.tile, className)}>
+      <Icon className="h-8 w-8 opacity-90 drop-shadow" strokeWidth={1.5} />
+      {host && <span className="max-w-[85%] truncate text-[11px] font-semibold text-white/90">{host}</span>}
     </div>
   );
 }
@@ -62,46 +91,45 @@ export function ContentThumb({ item, className }) {
 export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, footer }) {
   const meta = TYPE_META[item.type] || TYPE_META.link;
   return (
-    <article className="card group flex flex-col overflow-hidden transition duration-200 hover:-translate-y-1 hover:shadow-pop">
+    <article className="card group flex flex-col overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:shadow-pop">
       <button type="button" onClick={() => onPreview(item)} className="relative block aspect-[16/10] w-full overflow-hidden" aria-label={`Preview ${item.title}`}>
-        <ContentThumb item={item} className="h-full w-full transition duration-300 group-hover:scale-[1.02]" />
-        <span className="absolute left-3 top-3"><Badge tone={cx(meta.tone, 'bg-white/90 backdrop-blur')} icon={meta.icon}>{meta.label}</Badge></span>
+        <ContentThumb item={item} className="h-full w-full transition duration-300 group-hover:scale-[1.03]" />
+        <span className="absolute left-1.5 top-1.5 sm:left-2 sm:top-2"><Badge tone={cx(meta.tone, 'bg-white/90 px-1.5 py-0.5 text-[10px] backdrop-blur [&_svg]:h-3 [&_svg]:w-3')} icon={meta.icon}><span className="hidden sm:inline">{meta.label}</span></Badge></span>
         {item.parts > 0 && (
-          <span className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-slate-900/75 px-2 py-0.5 text-xs font-medium text-white backdrop-blur">
-            <Layers className="h-3.5 w-3.5" />+{item.parts}
+          <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur">
+            <Layers className="h-3 w-3" />+{item.parts}
           </span>
         )}
       </button>
-      <div className="flex flex-1 flex-col p-4">
-        {item.parent_title && <p className="mb-1 truncate text-xs font-medium text-brand-700">Added to: {item.parent_title}</p>}
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="line-clamp-2 text-sm font-semibold text-slate-900">{item.title}</h3>
+      <div className="flex flex-1 flex-col p-2 sm:p-3">
+        {item.parent_title && <p className="mb-0.5 truncate text-[11px] font-medium text-brand-700">Added to: {item.parent_title}</p>}
+        <div className="flex items-start justify-between gap-1">
+          <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
           <div className="-mr-1 -mt-0.5 flex shrink-0 items-center">
-            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} />}
+            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} className="hidden sm:block" />}
             {onBookmark && (
-              <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'}
-                className={cx('rounded-md p-1 transition', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
-                {item.bookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+              <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
+                className={cx('rounded-md p-1 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
+                <Bookmark className="h-4 w-4" fill={item.bookmarked ? 'currentColor' : 'none'} />
               </button>
             )}
           </div>
         </div>
-        {item.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{item.description}</p>}
+        {item.description && <p className="mt-0.5 hidden text-xs text-slate-500 sm:line-clamp-1">{item.description}</p>}
         {showStatus && (
-          <div className="mt-3"><Badge tone={STATUS_META[item.status].tone}>{STATUS_META[item.status].label}</Badge></div>
+          <div className="mt-2"><Badge tone={STATUS_META[item.status].tone} className="px-1.5 py-0.5 text-[10px]">{STATUS_META[item.status].label}</Badge></div>
         )}
         {showStatus && item.status === 'rejected' && item.review_note && (
-          <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800"><span className="font-medium">Reviewer note:</span> {item.review_note}</p>
+          <p className="mt-1.5 line-clamp-2 rounded-md bg-rose-50 px-2 py-1 text-[11px] text-rose-800"><span className="font-medium">Reviewer note:</span> {item.review_note}</p>
         )}
-        <div className="mt-auto flex items-center gap-2 pt-4 text-xs text-slate-500">
-          <Avatar name={item.uploader} size="sm" />
-          <span className="truncate">{item.uploader}</span>
-          <span className="ml-auto flex shrink-0 items-center gap-2.5">
-            {item.status === 'approved' && <ViewCount value={item.views} />}
-            {timeAgo(item.created_at)}
+        <div className="mt-auto flex items-center gap-1.5 pt-1.5 text-[10px] text-slate-500 sm:pt-2 sm:text-[11px]">
+          <span className="min-w-0 truncate">{item.uploader}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            {item.status === 'approved' && <ViewCount value={item.views} className="hidden sm:inline-flex [&_svg]:h-3 [&_svg]:w-3" />}
+            <span className="hidden sm:inline">{timeAgo(item.created_at)}</span>
           </span>
         </div>
-        {footer && <div className="mt-4 border-t border-slate-100 pt-3">{footer}</div>}
+        {footer && <div className="mt-2 border-t border-slate-100 pt-1.5">{footer}</div>}
       </div>
     </article>
   );

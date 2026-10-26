@@ -1,4 +1,5 @@
-import { api, sendUpload, startUpload } from './api.js';
+import { api, saveThumbnail, sendUpload, startUpload } from './api.js';
+import { makeThumbnail } from './thumbnails.js';
 
 // Uploads run here, outside any page, so they continue while the user moves around the app. Files waiting to finish
 // are also kept in IndexedDB: if the tab is closed (or the phone suspends it), they resume next time VOICE opens.
@@ -38,6 +39,9 @@ let controller = null;
 let wakeLock = null;
 let notify = () => {};
 const listeners = new Set();
+const thumbnailListeners = new Set();
+/** Notifies when a freshly uploaded item gets its thumbnail, so open lists can refresh. */
+export const onThumbnail = listener => { thumbnailListeners.add(listener); return () => thumbnailListeners.delete(listener); };
 const ACTIVE = ['queued', 'uploading', 'waiting'];
 
 const emit = () => listeners.forEach(listener => listener());
@@ -73,10 +77,20 @@ function waitForNetwork() {
   });
 }
 
-function settle(job, status, error = '') {
-  patch(job.id, { status, error, progress: status === 'done' ? 100 : find(job.id)?.progress || 0 });
+function attachThumbnail(job, contentId) {
+  if (job.kind !== 'file' || !contentId || !job.file) return;
+  // Runs after the file is safe on the server; a missing thumbnail only means the card shows its type icon.
+  Promise.resolve(job.thumbnail || makeThumbnail(job.file))
+    .then(blob => blob && saveThumbnail(contentId, blob))
+    .then(() => thumbnailListeners.forEach(listener => listener(contentId)))
+    .catch(() => {});
+}
+
+function settle(job, status, error = '', result = null) {
+  patch(job.id, { status, error, progress: status === 'done' ? 100 : find(job.id)?.progress || 0, published: result?.status === 'approved' });
   if (job.kind === 'file') saved.remove(job.id);
-  job.resolve?.({ id: job.id, key: job.key, status, error });
+  if (status === 'done') attachThumbnail(find(job.id) || job, result?.id);
+  job.resolve?.({ id: job.id, key: job.key, status, error, contentStatus: result?.status });
   notify(find(job.id));
 }
 
@@ -84,15 +98,14 @@ async function process(job) {
   patch(job.id, { status: 'uploading', error: '' });
   try {
     if (job.kind === 'link') {
-      await api('/content', { method: 'POST', body: { ...job.fields, url: job.url } });
-      settle(job, 'done');
+      settle(job, 'done', '', await api('/content', { method: 'POST', body: { ...job.fields, url: job.url } }));
       return;
     }
     let { uploadId, chunkSize } = find(job.id);
     let offset = 0;
     if (uploadId) {
       const state = await api(`/uploads/${encodeURIComponent(uploadId)}`);
-      if (state.done) { settle(job, 'done'); return; }
+      if (state.done) { settle(job, 'done', '', { id: uploadId }); return; }
       offset = state.received;
       patch(job.id, { progress: Math.min(99, Math.round((offset / job.size) * 100)) });
     } else {
@@ -103,10 +116,10 @@ async function process(job) {
       });
     }
     controller = new AbortController();
-    await sendUpload({
+    const result = await sendUpload({
       id: uploadId, chunkSize, file: job.file, offset, signal: controller.signal, onProgress: progress => patch(job.id, { progress }),
     });
-    settle(job, 'done');
+    settle(job, 'done', '', result);
   } catch (error) {
     if (error.name === 'AbortError' || !find(job.id)) return;
     if (error.status === 0) {

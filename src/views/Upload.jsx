@@ -1,27 +1,106 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, Plus, UploadCloud, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, CloudOff, Copy, ExternalLink, Eye, FileUp, Layers, Lightbulb, Link2, Plus, UploadCloud, X } from 'lucide-react';
 import { api } from '../api.js';
 import { enqueue, forget } from '../uploads.js';
+import { makeThumbnail } from '../thumbnails.js';
 import UploadTray from '../components/UploadTray.jsx';
-import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
+import { youtubeId } from '../components/Content.jsx';
+import { Button, Modal, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
 
 const fileTypeOf = file => ['image', 'video', 'audio'].find(type => file.type.startsWith(`${type}/`)) || 'doc';
 const titleFromName = name => name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim().slice(0, 160);
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+const isText = file => file.type.startsWith('text/') || /\.(txt|md|csv|json)$/i.test(file.name);
+const isPdf = file => file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
 let nextKey = 0;
 
-function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, onCopyDescription }) {
+// Thumbnails are made one file at a time so a large batch of videos doesn't overwhelm the device.
+let thumbChain = Promise.resolve();
+const queueThumbnail = file => { const next = thumbChain.then(() => makeThumbnail(file)); thumbChain = next.catch(() => {}); return next; };
+
+function FilePreview({ item, onClose }) {
+  const [url, setUrl] = useState('');
+  const [text, setText] = useState(null);
+  const file = item?.file;
+  useEffect(() => {
+    if (!file) return undefined;
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    setText(null);
+    if (isText(file)) file.slice(0, 200_000).text().then(setText).catch(() => setText(''));
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+  if (!item) return null;
+  let body;
+  if (item.kind === 'link') {
+    body = (
+      <div className="space-y-3">
+        {item.thumbUrl && <img src={item.thumbUrl} alt="" className="mx-auto max-h-[50vh] rounded-lg object-contain" />}
+        <p className="break-all rounded-lg bg-slate-50 p-4 text-sm text-slate-800">{item.url}</p>
+      </div>
+    );
+  } else if (!url) body = null;
+  else if (item.type === 'image') body = <img src={url} alt={item.title} className="mx-auto max-h-[65vh] rounded-lg object-contain" />;
+  else if (item.type === 'video') body = <video src={url} controls autoPlay playsInline className="mx-auto max-h-[65vh] w-full rounded-lg bg-black" />;
+  else if (item.type === 'audio') {
+    body = (
+      <div className="space-y-4 text-center">
+        {item.thumbUrl && <img src={item.thumbUrl} alt="" className="mx-auto max-h-56 rounded-lg object-contain" />}
+        <audio src={url} controls autoPlay className="w-full" />
+      </div>
+    );
+  } else if (isPdf(file)) body = <iframe title={item.title} src={url} className="h-[65vh] w-full rounded-lg border border-slate-200" />;
+  else if (isText(file)) body = <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-4 text-xs text-slate-800">{text ?? 'Loading…'}</pre>;
+  else {
+    body = (
+      <div className="space-y-3 text-center">
+        {item.thumbUrl
+          ? <img src={item.thumbUrl} alt="" className="mx-auto max-h-[55vh] rounded-lg object-contain shadow ring-1 ring-slate-200" />
+          : <p className="rounded-lg bg-slate-50 p-8 text-sm text-slate-500">A preview isn’t available for this file type.</p>}
+        {item.thumbUrl && <p className="text-xs text-slate-500">First page preview. The full file is uploaded as is.</p>}
+      </div>
+    );
+  }
+  return (
+    <Modal open onClose={onClose} title={item.title || item.file?.name || 'Preview'} size="lg"
+      description={item.kind === 'file' ? `${item.file.name} · ${formatBytes(item.file.size)}` : undefined}
+      footer={item.kind === 'link'
+        ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
+        : <Button variant="secondary" onClick={onClose}>Close</Button>}>
+      {body}
+    </Modal>
+  );
+}
+
+function QueueThumb({ item, compact, onPreview }) {
   const Icon = TYPE_META[item.type].icon;
+  return (
+    <button type="button" onClick={onPreview} aria-label={`Preview ${item.title || item.file?.name || item.url}`}
+      className={cx('group/thumb relative shrink-0 overflow-hidden rounded-lg ring-1 ring-slate-200', compact ? 'h-9 w-14' : 'h-16 w-24 sm:h-20 sm:w-32')}>
+      {item.thumbUrl
+        ? <img src={item.thumbUrl} alt="" className="h-full w-full bg-slate-100 object-cover" />
+        : (
+          <span className={cx('flex h-full w-full items-center justify-center bg-gradient-to-br', TYPE_META[item.type].tile)}>
+            <Icon className={compact ? 'h-4 w-4' : 'h-6 w-6'} strokeWidth={1.75} />
+          </span>
+        )}
+      <span className="absolute inset-0 flex items-center justify-center bg-slate-900/0 text-white opacity-0 transition group-hover/thumb:bg-slate-900/40 group-hover/thumb:opacity-100 group-focus-visible/thumb:bg-slate-900/40 group-focus-visible/thumb:opacity-100">
+        <Eye className="h-5 w-5" />
+      </span>
+    </button>
+  );
+}
+
+function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, onCopyDescription, onPreview }) {
   const done = item.status === 'done';
   return (
     <li className={cx('rounded-xl border', compact ? 'p-2.5' : 'p-3 sm:p-4', done ? 'border-emerald-200 bg-emerald-50/50' : item.status === 'error' ? 'border-rose-200' : 'border-slate-200')}>
       <div className={cx('flex gap-3', compact ? 'items-center' : 'items-start')}>
-        <div className={cx('flex shrink-0 items-center justify-center rounded-lg', compact ? 'h-8 w-8' : 'h-10 w-10', TYPE_META[item.type].tone || 'bg-slate-100 text-slate-600')}>
-          <Icon className={compact ? 'h-4 w-4' : 'h-5 w-5'} />
-        </div>
+        <QueueThumb item={item} compact={compact} onPreview={onPreview} />
         <div className="min-w-0 flex-1 space-y-2">
-          <p className={cx('truncate', compact ? 'text-sm text-slate-700' : 'pt-0.5 text-xs text-slate-500')}>
-            {item.kind === 'file' ? `${item.file.name} · ${formatBytes(item.file.size)}` : item.url}
+          <p className={cx('flex items-center gap-2', compact ? 'text-sm text-slate-700' : 'pt-0.5 text-xs text-slate-500')}>
+            <span className="truncate">{item.kind === 'file' ? `${item.file.name} · ${formatBytes(item.file.size)}` : item.url}</span>
+            {!compact && <button type="button" onClick={onPreview} className="inline-flex shrink-0 items-center gap-1 font-medium text-brand-700 hover:text-brand-800"><Eye className="h-3.5 w-3.5" />Preview</button>}
           </p>
           {!compact && <>
           <input required maxLength={160} className="input" aria-label={`Title ${index + 1}`} disabled={locked || done}
@@ -68,6 +147,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(0);
+  const [published, setPublished] = useState(false);
   const [storage, setStorage] = useState(null);
   const [sameForAll, setSameForAll] = useState(false);
   const [shared, setShared] = useState({ title: '', description: '' });
@@ -80,6 +160,10 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const update = (key, patch) => setItems(list => list.map(item => (item.key === key ? { ...item, ...patch } : item)));
+  const [previewKey, setPreviewKey] = useState(null);
+  const previewItem = items.find(item => item.key === previewKey) || null;
+  const thumbUrls = useRef(new Set());
+  useEffect(() => () => thumbUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
 
   useEffect(() => {
     if (items.length < 2) { setSameForAll(false); setShared({ title: '', description: '' }); }
@@ -89,9 +173,18 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     const files = [...(fileList || [])];
     const empty = files.filter(file => !file.size).length;
     setError(empty ? `${plural(empty, 'empty file')} skipped.` : '');
-    setItems(list => [...list, ...files.filter(file => file.size).map(file => ({
+    const added = files.filter(file => file.size).map(file => ({
       key: ++nextKey, kind: 'file', file, type: fileTypeOf(file), title: titleFromName(file.name), description: '', status: 'ready', progress: 0,
-    }))]);
+    }));
+    setItems(list => [...list, ...added]);
+    for (const item of added) {
+      queueThumbnail(item.file).then(thumb => {
+        if (!thumb || !mounted.current) return;
+        const thumbUrl = URL.createObjectURL(thumb);
+        thumbUrls.current.add(thumbUrl);
+        update(item.key, { thumb, thumbUrl });
+      });
+    }
   }
 
   function addLinks() {
@@ -103,7 +196,11 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     if (!urls.length) return;
     if (invalid) { setError(`"${invalid}" is not a valid link.`); return; }
     setError('');
-    setItems(list => [...list, ...urls.map(url => ({ key: ++nextKey, kind: 'link', url, type: 'link', title: parent?.title || '', description: '', status: 'ready', progress: 0 }))]);
+    setItems(list => [...list, ...urls.map(url => {
+      const yt = youtubeId(url);
+      return { key: ++nextKey, kind: 'link', url, type: 'link', title: parent?.title || '', description: '', status: 'ready', progress: 0,
+        thumbUrl: yt ? `https://img.youtube.com/vi/${encodeURIComponent(yt)}/hqdefault.jpg` : undefined };
+    })]);
     setLinks('');
   }
 
@@ -119,7 +216,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       const fields = { title: source.title.trim(), description: source.description.trim(), ...(parent ? { parentId: parent.id } : {}) };
       update(item.key, { status: 'ready', progress: 0, error: '' });
       return {
-        key: item.key, kind: item.kind, file: item.file, url: item.url, title: fields.title,
+        key: item.key, kind: item.kind, file: item.file, url: item.url, title: fields.title, thumbnail: item.thumb,
         fields: item.kind === 'file' && isAdmin ? { ...fields, targetDriveId: target } : fields,
         onUpdate: ({ status, progress, error: message }) => update(item.key, {
           status: status === 'queued' ? 'ready' : status, progress, error: status === 'error' ? message : '',
@@ -132,6 +229,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     forget(results.map(result => result.id));
     setBusy(false);
     if (ok) onChanged?.();
+    setPublished(results.some(result => result.contentStatus === 'approved'));
     if (failed) {
       setError(`${plural(failed, 'item')} could not be submitted. Fix and submit again.`);
       toast(`${plural(failed, 'item')} failed`, 'error');
@@ -149,10 +247,15 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       <div className="mx-auto max-w-lg">
         <div className="card p-8 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><CheckCircle2 className="h-7 w-7" /></div>
-          <h2 className="text-lg font-semibold text-slate-900">{parent ? `${plural(submitted, 'item')} added to “${parent.title}”` : `${plural(submitted, 'item')} submitted for review`}</h2>
-          {parent && <p className="mt-1 text-sm text-slate-500">They will appear in that upload after admin approval.</p>}
+          <h2 className="text-lg font-semibold text-slate-900">
+            {parent ? `${plural(submitted, 'item')} added to “${parent.title}”` : `${plural(submitted, 'item')} ${published ? 'published' : 'submitted for review'}`}
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {published ? 'As an admin, your contributions are live in the library right away.'
+              : parent ? 'They will appear in that upload after admin approval.' : 'You’ll see them in the library once an admin approves them.'}
+          </p>
           <div className="mt-6 flex justify-center gap-2">
-            <Button variant="secondary" onClick={() => navigate(parent ? 'library' : 'mine')}>{parent ? 'Back to library' : 'My submissions'}</Button>
+            <Button variant="secondary" onClick={() => navigate(parent || published ? 'library' : 'mine')}>{parent || published ? 'Go to library' : 'My submissions'}</Button>
             <Button icon={UploadCloud} onClick={reset}>{parent ? 'Add more' : 'Upload more'}</Button>
           </div>
         </div>
@@ -266,6 +369,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
                 {items.map((item, index) => (
                   <QueueItem key={item.key} item={item} index={index} locked={busy} compact={useShared} canCopy={remaining.length > 1}
                     onChange={patch => update(item.key, patch)}
+                    onPreview={() => setPreviewKey(item.key)}
                     onRemove={() => setItems(list => list.filter(other => other.key !== item.key))}
                     onCopyDescription={() => setItems(list => list.map(other => (other.status === 'done' ? other : { ...other, description: item.description })))} />
                 ))}
@@ -293,6 +397,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
           </Button>
         </div>
       </form>
+      <FilePreview item={previewItem} onClose={() => setPreviewKey(null)} />
     </div>
   );
 }

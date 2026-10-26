@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import {
-  Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, Plus, Trophy, UploadCloud, Users,
+  Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, PieChart, Plus, Trophy, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
 import {
@@ -15,12 +15,14 @@ import Leaderboard from './views/Leaderboard.jsx';
 import Legal, { LEGAL_PAGES } from './views/Legal.jsx';
 import Login from './views/Login.jsx';
 import Members from './views/Members.jsx';
+import Overview from './views/Overview.jsx';
 import Review from './views/Review.jsx';
 import Storage from './views/Storage.jsx';
 import Upload from './views/Upload.jsx';
 
 const ITEMS = {
   library: { label: 'Library', icon: FolderOpen, tone: 'bg-violet-500/15 text-violet-300', soft: 'bg-violet-50 text-violet-600' },
+  overview: { label: 'Overview', icon: PieChart, tone: 'bg-teal-500/15 text-teal-300', soft: 'bg-teal-50 text-teal-600' },
   upload: { label: 'Contribute', icon: UploadCloud, tone: 'bg-pink-500/15 text-pink-300', soft: 'bg-pink-50 text-pink-600' },
   mine: { label: 'My submissions', short: 'Mine', icon: FileClock, tone: 'bg-sky-500/15 text-sky-300', soft: 'bg-sky-50 text-sky-600' },
   saved: { label: 'Saved', icon: Bookmark, tone: 'bg-amber-500/15 text-amber-300', soft: 'bg-amber-50 text-amber-600' },
@@ -31,7 +33,7 @@ const ITEMS = {
   activity: { label: 'Activity log', short: 'Activity', icon: History, roles: ['site_admin'], tone: 'bg-indigo-500/15 text-indigo-300', soft: 'bg-indigo-50 text-indigo-600' },
 };
 const SECTIONS = [
-  ['Content', ['library', 'upload', 'mine', 'saved', 'leaderboard']],
+  ['Content', ['library', 'overview', 'upload', 'mine', 'saved', 'leaderboard']],
   ['Administration', ['review', 'members', 'storage', 'activity']],
 ];
 const BOTTOM_NAV = {
@@ -120,6 +122,7 @@ function Shell({ user, config, onSignOut }) {
   const props = { user, config, navigate, onChanged: refreshPending, onAddTo: addTo, sharedContentId };
   const page = {
     library: <Library key="library" scope="library" {...props} />,
+    overview: <Overview {...props} />,
     saved: <Library key="saved" scope="saved" {...props} />,
     leaderboard: <Leaderboard {...props} />,
     mine: <Library key="mine" scope="mine" {...props} />,
@@ -138,7 +141,8 @@ function Shell({ user, config, onSignOut }) {
     <div className="min-h-screen">
       <PersistentMediaPlayer />
       {/* Desktop sidebar: an icon rail that expands over the page on hover or keyboard focus */}
-      <aside className="group/side fixed inset-y-0 left-0 z-40 hidden w-20 overflow-hidden bg-slate-950 text-white transition-[width,box-shadow] duration-200 ease-out hover:w-72 hover:shadow-2xl focus-within:w-72 focus-within:shadow-2xl lg:flex lg:flex-col">
+      <aside onMouseLeave={event => { if (event.currentTarget.contains(document.activeElement)) document.activeElement.blur(); }}
+        className="group/side fixed inset-y-0 left-0 z-40 hidden w-20 overflow-hidden bg-slate-950 text-white transition-[width,box-shadow] duration-200 ease-out hover:w-72 hover:shadow-2xl focus-within:w-72 focus-within:shadow-2xl lg:flex lg:flex-col">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-indigo-950 via-slate-950 to-slate-950" />
         <div className="pointer-events-none absolute -left-24 -top-24 h-64 w-64 rounded-full bg-violet-600/30 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-32 -right-24 h-72 w-72 rounded-full bg-pink-600/20 blur-3xl" />
@@ -208,7 +212,7 @@ function Shell({ user, config, onSignOut }) {
         </div>
       </header>
 
-      <div className="lg:pl-20">
+      <div className="overflow-x-clip lg:pl-20">
         <main key={active} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-10">{page}</main>
       </div>
       {active !== 'upload' && <UploadTray />}

@@ -127,13 +127,12 @@ export function Avatar({ name = '', size = 'md' }) {
 export function Spinner({ label = 'Loading…', variant = 'list', rows = 5 }) {
   if (variant === 'grid') {
     return (
-      <div role="status" aria-label={label} className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-        {Array.from({ length: 8 }, (_, i) => (
+      <div role="status" aria-label={label} className="grid grid-cols-3 gap-2 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
+        {Array.from({ length: 10 }, (_, i) => (
           <div key={i} className="card overflow-hidden">
-            <Bone className="aspect-video rounded-none" />
-            <div className="space-y-2.5 p-4">
-              <Bone className="h-4 w-3/4" /><Bone className="h-3 w-full" /><Bone className="h-3 w-2/3" />
-              <div className="flex items-center gap-2 pt-2"><Bone className="h-6 w-6 rounded-full" /><Bone className="h-3 w-24" /></div>
+            <Bone className="aspect-[16/10] rounded-none" />
+            <div className="space-y-2 p-2 sm:p-3">
+              <Bone className="h-3.5 w-3/4" /><Bone className="h-3 w-1/2" />
             </div>
           </div>
         ))}

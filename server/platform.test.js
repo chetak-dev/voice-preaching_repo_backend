@@ -45,11 +45,13 @@ async function signIn(role, password = TEST_PASSWORD) {
   const res = await post('/api/auth/login', { email: ACCOUNTS[role] || role, password });
   assert.equal(res.status, 200);
   const cookie = res.headers.get('set-cookie').split(';')[0];
-  return async (url, { method = 'GET', body, raw } = {}) => {
+  return async (url, { method = 'GET', body, raw, type } = {}) => {
     const headers = { Cookie: cookie, Origin: ORIGIN };
     if (body) headers['Content-Type'] = 'application/json';
-    if (raw) headers['Content-Type'] = 'application/octet-stream';
+    if (raw) headers['Content-Type'] = type || 'application/octet-stream';
     const response = await fetch(`${base}${url}`, { method, headers, body: raw || (body && JSON.stringify(body)) });
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.startsWith('image/')) return { status: response.status, type: contentType, bytes: Buffer.from(await response.arrayBuffer()) };
     return { status: response.status, json: await response.json().catch(() => null) };
   };
 }
@@ -74,7 +76,7 @@ test('state-changing requests from other origins are rejected', async () => {
   assert.equal(res.status, 403);
 });
 
-test('submissions from any role require admin approval', async () => {
+test('member submissions require admin approval; admin submissions are published', async () => {
   const user = await signIn('user');
   const orgAdmin = await signIn('org_admin');
   const admin = await signIn('site_admin');
@@ -105,9 +107,13 @@ test('submissions from any role require admin approval', async () => {
   assert.ok(after.json.items.some(item => item.id === created.json.id));
 
   const orgAdminPost = await orgAdmin('/api/content', { method: 'POST', body: { title: 'Org admin link', url: 'https://example.org/a' } });
-  assert.equal(orgAdminPost.json.status, 'pending');
+  assert.equal(orgAdminPost.json.status, 'approved', 'admin submissions are published without review');
+  assert.equal(orgAdminPost.json.message, 'Published.');
   const adminPost = await admin('/api/content', { method: 'POST', body: { title: 'Admin link', url: 'https://example.org/b' } });
-  assert.equal(adminPost.json.status, 'pending');
+  assert.equal(adminPost.json.status, 'approved');
+  const published = await user('/api/content?scope=library');
+  assert.ok([orgAdminPost.json.id, adminPost.json.id].every(id => published.json.items.some(item => item.id === id && item.status === 'approved')));
+  assert.ok(!(await admin('/api/content?scope=review')).json.items.some(item => [orgAdminPost.json.id, adminPost.json.id].includes(item.id)));
 });
 
 test('rejections require a note and are visible to the uploader', async () => {
@@ -294,8 +300,9 @@ test('org admins can approve or reject content, and nothing else', async () => {
   assert.equal((await orgAdmin(`/api/content/${second.id}/review`, { method: 'POST', body: { decision: 'rejected', note: 'Please add details.' } })).status, 200);
 
   const own = (await orgAdmin('/api/content', { method: 'POST', body: { title: 'My own link', url: 'https://example.org/own' } })).json;
-  assert.equal((await orgAdmin(`/api/content/${own.id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 403);
-  assert.equal((await admin(`/api/content/${own.id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 200);
+  assert.equal(own.status, 'approved');
+  assert.equal((await orgAdmin(`/api/content/${own.id}/review`, { method: 'POST', body: { decision: 'rejected', note: 'Changed my mind' } })).status, 403,
+    'org admins cannot review their own submissions');
 
   assert.equal((await orgAdmin(`/api/content/${json.id}`, { method: 'DELETE' })).status, 403);
   assert.equal((await user(`/api/content/${json.id}`, { method: 'DELETE' })).status, 403);
@@ -336,13 +343,13 @@ test('bulk review is bounded, skips ineligible items, and keeps org admins from 
   assert.deepEqual(approved.json, { approved: 2, skipped: 0 });
   assert.equal((await user('/api/content?scope=library')).json.items.filter(row => [first.id, second.id].includes(row.id)).length, 2);
   const own = (await orgAdmin('/api/content', { method: 'POST', body: { title: 'Org admin own item', url: 'https://example.org/org-own' } })).json;
+  assert.equal(own.status, 'approved', 'admin submissions skip the review queue');
   const skipped = await orgAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [own.id] } });
   assert.equal(skipped.status, 200);
   assert.deepEqual(skipped.json, { approved: 0, skipped: 1 });
-  assert.ok((await orgAdmin('/api/content?scope=review')).json.items.some(row => row.id === own.id));
+  assert.ok(!(await orgAdmin('/api/content?scope=review')).json.items.some(row => row.id === own.id));
   assert.equal((await siteAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: Array.from({ length: 26 }, (_, index) => `bad-${index}`) } })).status, 400);
   assert.equal((await siteAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [first.id, first.id] } })).status, 400);
-  assert.equal((await siteAdmin('/api/review/bulk-approve', { method: 'POST', body: { ids: [own.id] } })).json.approved, 1);
 });
 
 test('storage management is restricted to site admins', async () => {
@@ -547,4 +554,28 @@ test('rejecting an upload also rejects its pending additions', async () => {
   assert.equal(mine.status, 'rejected');
   assert.equal((await user('/api/content', { method: 'POST', body: { title: 'Late', url: 'https://example.org/l', parentId: parent.id } })).status, 409);
   await user(`/api/content/${parent.id}`, { method: 'DELETE' });
+});
+
+test('thumbnails are validated images that only the uploader or an admin can set, and are removed with the content', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const admin = await signIn('site_admin');
+  const item = (await user('/api/content', { method: 'POST', body: { title: 'Thumb link', url: 'https://example.org/thumb' } })).json;
+  const jpeg = Buffer.concat([Buffer.from('ffd8ffe000104a46494600010100000100010000', 'hex'), Buffer.alloc(32)]);
+  assert.equal((await user(`/api/content/${item.id}/thumbnail`)).status, 404);
+  assert.equal((await user(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: Buffer.from('not an image at all'), type: 'image/jpeg' })).status, 400);
+  assert.equal((await user(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: jpeg, type: 'image/gif' })).status, 400);
+  assert.equal((await user(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: jpeg, type: 'image/jpeg' })).status, 200);
+  assert.equal((await viewer(`/api/content/${item.id}/thumbnail`)).status, 404, 'pending thumbnails are hidden from others');
+  const own = await user(`/api/content/${item.id}/thumbnail`);
+  assert.equal(own.type, 'image/jpeg');
+  assert.ok(own.bytes.equals(jpeg));
+  assert.equal((await user('/api/content?scope=mine')).json.items.find(row => row.id === item.id).has_thumb, 1);
+
+  await admin(`/api/content/${item.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  assert.equal((await viewer(`/api/content/${item.id}/thumbnail`)).status, 200);
+  assert.equal((await viewer(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: jpeg, type: 'image/jpeg' })).status, 403);
+  assert.equal((await admin(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: jpeg, type: 'image/jpeg' })).status, 200);
+  assert.equal((await admin(`/api/content/${item.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await app.locals.db.get('SELECT count(*) AS n FROM thumbnails WHERE content_id = ?', item.id)).n, 0);
 });

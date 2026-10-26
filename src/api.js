@@ -73,3 +73,9 @@ export async function sendUpload({ id, chunkSize, file, onProgress, signal, offs
 }
 
 export const fileUrl = (id, inline = false) => `/api/content/${encodeURIComponent(id)}/file${inline ? '?inline=1' : ''}`;
+export const thumbnailUrl = id => `/api/content/${encodeURIComponent(id)}/thumbnail`;
+
+export async function saveThumbnail(id, blob) {
+  const response = await fetch(thumbnailUrl(id), { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': blob.type }, body: blob });
+  if (!response.ok) throw new ApiError((await response.json().catch(() => null))?.error || 'Thumbnail could not be saved.', response.status);
+}

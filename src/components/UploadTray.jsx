@@ -27,12 +27,14 @@ export default function UploadTray({ inline = false }) {
   const progress = Math.round(jobs.reduce((sum, job) => sum + weight(job) * (job.status === 'done' ? 100 : job.progress), 0)
     / jobs.reduce((sum, job) => sum + weight(job), 0));
 
+  const published = jobs.some(job => job.published);
   const title = active.length
     ? waiting ? 'Waiting for connection…' : `Uploading ${Math.min(done + failed.length + 1, jobs.length)} of ${jobs.length}`
-    : failed.length ? `${plural(failed.length, 'upload')} failed` : `${plural(done, 'upload')} submitted for review`;
+    : failed.length ? `${plural(failed.length, 'upload')} failed` : `${plural(done, 'upload')} ${published ? 'published' : 'submitted for review'}`;
   const hint = active.length
     ? 'Keep using VOICE freely. If you close it, uploads continue the next time you open it.'
-    : failed.length ? 'Open the list for details, then upload those files again.' : 'They will appear in the library after approval.';
+    : failed.length ? 'Open the list for details, then upload those files again.'
+      : published ? 'They are live in the library now.' : 'They will appear in the library after approval.';
 
   return (
     <div className={cx('card overflow-hidden', inline ? 'mb-4' : 'fixed bottom-24 right-4 z-40 w-[min(22rem,calc(100vw-2rem))] shadow-pop animate-fade-in lg:bottom-6 lg:right-6')}

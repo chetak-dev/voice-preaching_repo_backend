@@ -178,6 +178,10 @@ export function createApp(overrides = {}) {
   const siteAdmin = roles('site_admin');
   const reviewers = roles('site_admin', 'org_admin');
   const isReviewer = user => user.role === 'site_admin' || user.role === 'org_admin';
+  // Admin contributions are published immediately; everyone else's wait for review.
+  const initialReview = user => isReviewer(user)
+    ? { status: 'approved', reviewedBy: user.id, reviewedAt: new Date().toISOString(), action: 'Published content', message: 'Published.' }
+    : { status: 'pending', reviewedBy: null, reviewedAt: null, action: 'Submitted content', message: 'Submitted for admin approval.' };
   const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 30, legacyHeaders: false, skipSuccessfulRequests: true,
     message: { error: 'Too many sign-in attempts. Please try again later.' } });
 
@@ -309,6 +313,7 @@ export function createApp(overrides = {}) {
   app.use('/api', authenticated);
   const contentQuery = `SELECT c.*, u.name AS uploader, r.name AS reviewer, p.title AS parent_title,
     EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked,
+    EXISTS(SELECT 1 FROM thumbnails t WHERE t.content_id = c.id) AS has_thumb,
     (SELECT count(*) FROM content_views v WHERE v.content_id = c.id) AS views,
     (SELECT count(*) FROM content a WHERE a.parent_id = c.id AND a.status = 'approved') AS parts
     FROM content c JOIN users u ON u.id = c.uploader_id
@@ -427,10 +432,12 @@ export function createApp(overrides = {}) {
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw fail(400, 'Links must start with http:// or https:// and cannot contain credentials.');
     const parent = await additionTarget(req);
     const id = randomUUID();
-    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at,parent_id)
-      VALUES (?,?,?,'link',?,'pending',?,?,?)`, id, title, description, url, req.user.id, new Date().toISOString(), parent?.id ?? null);
-    await audit(db, req.user.id, parent ? 'Added to upload' : 'Submitted content', parent ? `${title} → ${parent.title}` : title);
-    res.status(201).json({ id, status: 'pending', message: 'Submitted for admin approval.' });
+    const review = initialReview(req.user);
+    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at)
+      VALUES (?,?,?,'link',?,?,?,?,?,?,?)`, id, title, description, url, review.status, req.user.id, new Date().toISOString(), parent?.id ?? null,
+    review.reviewedBy, review.reviewedAt);
+    await audit(db, req.user.id, parent ? 'Added to upload' : review.action, parent ? `${title} → ${parent.title}` : title);
+    res.status(201).json({ id, status: review.status, message: review.message });
   }));
 
   // Chunked uploads keep every request under serverless body limits and stream straight into Google Drive.
@@ -542,6 +549,7 @@ export function createApp(overrides = {}) {
       }
 
       const id = upload.id;
+      const review = initialReview(req.user);
       let existing = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ?', id, req.user.id);
       let created = false;
       if (!existing) {
@@ -554,9 +562,10 @@ export function createApp(overrides = {}) {
             throw fail(409, 'The upload you were adding to is no longer available.');
           }
           await db.run(`INSERT INTO content
-            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at,parent_id)
-            VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
-          upload.original_name, upload.size, upload.node, completedKey, req.user.id, new Date().toISOString(), upload.parent_id ?? null);
+            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
+          upload.original_name, upload.size, upload.node, completedKey, review.status, req.user.id, new Date().toISOString(), upload.parent_id ?? null,
+          review.reviewedBy, review.reviewedAt);
           created = true;
         } catch (error) {
           if (error.status === 409) throw error;
@@ -566,9 +575,12 @@ export function createApp(overrides = {}) {
       }
       await db.run('DELETE FROM uploads WHERE id = ? AND chunk_lock = ?', upload.id, token);
       locked = false;
-      if (created) await audit(db, req.user.id, upload.parent_id ? 'Added to upload' : 'Submitted content', upload.title);
+      if (created) await audit(db, req.user.id, upload.parent_id ? 'Added to upload' : review.action, upload.title);
       const status = created ? 201 : 200;
-      return res.status(status).json({ done: true, id, status: 'pending', message: 'Submitted for admin approval.' });
+      const saved = await db.get('SELECT status FROM content WHERE id = ?', id);
+      const finalStatus = saved?.status || review.status;
+      return res.status(status).json({ done: true, id, status: finalStatus,
+        message: finalStatus === 'approved' ? 'Published.' : 'Submitted for admin approval.' });
     } finally {
       if (locked) await db.run('UPDATE uploads SET chunk_lock = NULL, chunk_lock_expires = NULL WHERE id = ? AND chunk_lock = ?', upload.id, token);
     }
@@ -676,14 +688,42 @@ export function createApp(overrides = {}) {
       await removeStored(part, release);
       await db.run('DELETE FROM bookmarks WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content_views WHERE content_id = ?', part.id);
+      await db.run('DELETE FROM thumbnails WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content WHERE id = ?', part.id);
     }
     await removeStored(item, release);
     await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
     await db.run('DELETE FROM content_views WHERE content_id = ?', item.id);
+    await db.run('DELETE FROM thumbnails WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);
     if (!deleted.changes) throw fail(409, 'The content changed while it was being removed. Refresh and try again.');
     await audit(db, req.user.id, 'Deleted content', item.title);
+    res.json({ ok: true });
+  }));
+  // Thumbnails are generated in the uploader's browser (a frame, first page or cover) and stored as small images.
+  const THUMB_TYPES = {
+    'image/jpeg': bytes => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,
+    'image/png': bytes => bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    'image/webp': bytes => bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP',
+  };
+  const THUMB_LIMIT = 300 * 1024;
+  app.get('/api/content/:id/thumbnail', h(async (req, res) => {
+    const { item } = await getContent(req);
+    const thumb = await db.get('SELECT mime, data FROM thumbnails WHERE content_id = ?', item.id);
+    if (!thumb) throw fail(404, 'No thumbnail yet.');
+    res.set('Cache-Control', 'private, max-age=86400');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.type(thumb.mime).send(Buffer.from(thumb.data));
+  }));
+  app.put('/api/content/:id/thumbnail', express.raw({ type: Object.keys(THUMB_TYPES), limit: THUMB_LIMIT }), h(async (req, res) => {
+    const { item } = await getContent(req);
+    if (item.uploader_id !== req.user.id && !isReviewer(req.user)) throw fail(403, 'Only the uploader or an admin can set a thumbnail.');
+    const mime = req.get('content-type')?.split(';')[0].trim();
+    const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!THUMB_TYPES[mime] || bytes.length < 12 || !THUMB_TYPES[mime](bytes)) throw fail(400, 'Thumbnails must be JPEG, PNG or WebP images.');
+    await db.run(`INSERT INTO thumbnails (content_id, mime, data, created_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(content_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, created_at = excluded.created_at`,
+    item.id, mime, bytes, new Date().toISOString());
     res.json({ ok: true });
   }));
   app.get('/api/content/:id/file', h(async (req, res) => {

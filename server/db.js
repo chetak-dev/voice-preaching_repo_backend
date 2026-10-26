@@ -72,6 +72,10 @@ const SCHEMA = `
     original_name TEXT NOT NULL, size INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0,
     node TEXT NOT NULL, session_uri TEXT, created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS thumbnails (
+    content_id TEXT PRIMARY KEY REFERENCES content(id), mime TEXT NOT NULL,
+    data BLOB NOT NULL, created_at TEXT NOT NULL
+  );
 `;
 
 /**
