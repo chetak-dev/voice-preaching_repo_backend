@@ -7,7 +7,7 @@ import { fingerprint } from '../textExtract.js';
 import { EMPTY_TAGS, detectVerses, refreshFacets } from '../components/Tags.jsx';
 import UploadTray from '../components/UploadTray.jsx';
 import { youtubeId } from '../components/Content.jsx';
-import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
+import { Button, Modal, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
 
 const fileTypeOf = file => ['image', 'video', 'audio'].find(type => file.type.startsWith(`${type}/`)) || 'doc';
 // Turns camera/download names like "update_objects-2408346d-...-20261024_003342.pdf" into a readable "Update Objects".
@@ -87,7 +87,7 @@ function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, 
           {item.duplicate && item.status !== 'done' && (
             <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
               <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-              <span>Already {STATUS_WORD[item.duplicate.status] || 'uploaded'} as ?{item.duplicate.title}?. Remove it unless this is a different version.</span>
+              <span>Already {STATUS_WORD[item.duplicate.status] || 'uploaded'} as “{item.duplicate.title}”. Remove it unless this is a different version.</span>
             </p>
           )}
           {item.status === 'waiting' && <p className="flex items-center gap-1.5 text-xs text-amber-700"><CloudOff className="h-3.5 w-3.5 shrink-0" />Waiting for connection… it will continue automatically.</p>}
@@ -118,6 +118,12 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   const [shared, setShared] = useState({ title: '', description: '' });
   const [tags, setTags] = useState(() => ({ ...EMPTY_TAGS, language: request?.language || '' }));
   const useShared = sameForAll && items.length > 1;
+  const [dupPrompt, setDupPrompt] = useState(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  // Duplicate checks still running; submitting waits for them so the warning is never skipped.
+  const checks = useRef(new Set());
+  const track = promise => { checks.current.add(promise); promise.finally(() => checks.current.delete(promise)); return promise; };
 
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -138,10 +144,10 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       key: ++nextKey, kind: 'file', file, type: fileTypeOf(file), title: titleFromName(file.name), description: '', status: 'ready', progress: 0,
     }));
     setItems(list => [...list, ...added]);
-    Promise.all(added.map(item => queueFingerprint(item.file).then(print => {
+    track(Promise.all(added.map(item => queueFingerprint(item.file).then(print => {
       if (print && mounted.current) update(item.key, { fingerprint: print });
       return print;
-    }, () => null))).then(prints => checkDuplicates({ fingerprints: prints.filter(Boolean) }, added.map((item, index) => ({ key: item.key, fingerprint: prints[index] }))));
+    }, () => null))).then(prints => checkDuplicates({ fingerprints: prints.filter(Boolean) }, added.map((item, index) => ({ key: item.key, fingerprint: prints[index] })))));
     for (const item of added) {
       queueThumbnail(item.file).then(thumb => {
         if (!thumb || !mounted.current) return;
@@ -181,16 +187,35 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     });
     setItems(list => [...list, ...added]);
     setLinks('');
-    checkDuplicates({ urls }, added.map(item => ({ key: item.key, url: item.url })));
+    track(checkDuplicates({ urls }, added.map(item => ({ key: item.key, url: item.url }))));
   }
 
   async function submit(event) {
     event.preventDefault();
-    const pending = items.filter(item => item.status !== 'done');
-    if (!pending.length) { setError('Add at least one file or link.'); return; }
-    if (useShared ? !shared.title.trim() : pending.some(item => !item.title.trim())) { setError(useShared ? 'Enter a title.' : 'Every item needs a title.'); return; }
+    const waiting = items.filter(item => item.status !== 'done');
+    if (!waiting.length) { setError('Add at least one file or link.'); return; }
+    if (useShared ? !shared.title.trim() : waiting.some(item => !item.title.trim())) { setError(useShared ? 'Enter a title.' : 'Every item needs a title.'); return; }
     setBusy(true);
     setError('');
+    await Promise.all([...checks.current]);
+    if (!mounted.current) return;
+    const dups = itemsRef.current.filter(item => item.status !== 'done' && item.duplicate);
+    if (dups.length) { setBusy(false); setDupPrompt(dups); return; }
+    await send();
+  }
+
+  function removeDuplicates() {
+    const keys = new Set(dupPrompt.map(item => item.key));
+    setItems(list => list.filter(item => !keys.has(item.key)));
+    setDupPrompt(null);
+  }
+
+  async function send() {
+    setDupPrompt(null);
+    setBusy(true);
+    setError('');
+    const pending = itemsRef.current.filter(item => item.status !== 'done');
+    if (!pending.length) { setBusy(false); return; }
     let requestId = request?.id;
     const results = await enqueue(pending.map(item => {
       const source = useShared ? shared : item;
@@ -223,7 +248,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       setError(`${plural(failed, 'item')} could not be submitted. Fix and submit again.`);
       toast(`${plural(failed, 'item')} failed`, 'error');
     } else {
-      setSubmitted(items.length - pending.length + ok);
+      setSubmitted(itemsRef.current.length - pending.length + ok);
     }
   }
 
@@ -387,6 +412,26 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
         </div>
       </form>
 
+      <Modal open={Boolean(dupPrompt)} onClose={() => setDupPrompt(null)} size="sm"
+        title={dupPrompt?.length > 1 ? `${dupPrompt.length} items are already uploaded` : 'This is already uploaded'}
+        footer={(
+          <>
+            <Button variant="secondary" onClick={removeDuplicates}>{dupPrompt?.length > 1 ? 'Remove duplicates' : 'Remove it'}</Button>
+            <Button onClick={send}>Upload anyway</Button>
+          </>
+        )}>
+        <p className="mb-3 text-sm text-slate-600">
+          The same file or link is already in Kalpa Taru. Upload it again only if it is a different version. An admin will see this warning when reviewing.
+        </p>
+        <ul className="space-y-2">
+          {dupPrompt?.map(item => (
+            <li key={item.key} className="rounded-lg bg-amber-50 px-3 py-2 text-sm ring-1 ring-amber-200">
+              <p className="truncate font-medium text-slate-900">{item.kind === 'file' ? item.file.name : item.url}</p>
+              <p className="text-xs text-amber-800">Already {STATUS_WORD[item.duplicate.status] || 'uploaded'} as “{item.duplicate.title}”</p>
+            </li>
+          ))}
+        </ul>
+      </Modal>
     </div>
   );
 }

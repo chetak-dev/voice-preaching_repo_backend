@@ -2,6 +2,12 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.5
+
+- Duplicate warning before upload: if a file or link is already in Kalpa Taru, a prompt lists the duplicates before anything is sent, with **Remove** or **Upload anyway**. Submitting waits for the check to finish so the warning is never skipped.
+- Duplicate warning in the review queue: matching submissions show a "Possible duplicate" note linking to the existing item, and Approve (single or bulk) asks for confirmation first.
+- Fixed the duplicate note on the upload form showing question marks instead of quotes.
+
 ## 1.7.4
 
 - Storage: "Files stored" now opens a list of everything on that Drive, including items the library hides (pending, rejected, private and added files). Each can be removed, so a Drive can be emptied and then deleted.

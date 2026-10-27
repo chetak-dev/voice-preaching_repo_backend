@@ -903,6 +903,19 @@ test('duplicate checks find matching files and links the member can see', async 
   assert.equal((await viewer('/api/uploads/check', { method: 'POST', body: { fingerprints: [fingerprint] } })).json.matches.length, 0, 'pending uploads of others are not revealed');
 });
 
+test('the review queue flags submissions that duplicate existing content', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const original = (await user('/api/content', { method: 'POST', body: { title: 'Original talk', url: 'https://example.org/same-talk' } })).json;
+  await admin(`/api/content/${original.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  const copy = (await user('/api/content', { method: 'POST', body: { title: 'Same talk again', url: 'https://example.org/same-talk' } })).json;
+  const fresh = (await user('/api/content', { method: 'POST', body: { title: 'Brand new talk', url: 'https://example.org/new-talk' } })).json;
+  const queue = (await admin('/api/content?scope=review')).json.items;
+  assert.deepEqual(queue.find(item => item.id === copy.id).duplicateOf, { id: original.id, title: 'Original talk', status: 'approved' });
+  assert.equal(queue.find(item => item.id === fresh.id).duplicateOf, undefined);
+  for (const id of [original.id, copy.id, fresh.id]) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
+});
+
 test('admins get analytics in the overview; members do not', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');

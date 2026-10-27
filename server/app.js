@@ -547,6 +547,17 @@ export function createApp(overrides = {}) {
         }
       }
     }
+    // Reviewers are warned when a submission matches a file or link that is already in the library or waiting.
+    if (scope === 'review') {
+      for (const row of rows) {
+        if (!row.fingerprint && !(row.type === 'link' && row.url)) continue;
+        const match = (await db.all(`SELECT id, title, status, visibility, uploader_id FROM content
+          WHERE id != ? AND status != 'rejected' AND (fingerprint = ? OR (type = 'link' AND url = ?))
+          ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END, created_at LIMIT 5`,
+        row.id, row.fingerprint || null, row.type === 'link' ? row.url : null)).find(other => visible(other, req.user));
+        if (match) row.duplicateOf = { id: match.id, title: match.title, status: match.status };
+      }
+    }
     const from = 'FROM content c JOIN users u ON u.id = c.uploader_id';
     const total = paged ? Number(await count(`SELECT count(*) AS n ${from} WHERE ${filter}`, ...params)) : rows.length;
     const typeRows = paged && offset === 0 ? await db.all(`SELECT c.type, count(*) AS n ${from} WHERE ${base} GROUP BY c.type`, ...baseParams) : null;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Eye, Inbox, Search, X } from 'lucide-react';
+import { AlertTriangle, Check, Eye, Inbox, Search, X } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentThumb, PreviewModal } from '../components/Content.jsx';
 import {
@@ -7,6 +7,19 @@ import {
 } from '../components/ui.jsx';
 
 const MAX_BULK_REVIEW = 25;
+const WHERE = { approved: 'already in the library', pending: 'also waiting for review' };
+
+function DuplicateNote({ match, onView }) {
+  return (
+    <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 ring-1 ring-amber-200">
+      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0">
+        Possible duplicate: the same {match.isLink ? 'link' : 'file'} is {WHERE[match.status] || 'already uploaded'} as{' '}
+        <button type="button" onClick={onView} className="font-semibold underline underline-offset-2 hover:text-amber-900">“{match.title}”</button>.
+      </span>
+    </p>
+  );
+}
 
 export default function Review({ user, onChanged }) {
   const toast = useToast();
@@ -17,6 +30,24 @@ export default function Review({ user, onChanged }) {
   const [busy, setBusy] = useState(null);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState([]);
+  const [dupConfirm, setDupConfirm] = useState(null);
+
+  async function viewExisting(match) {
+    try { setPreview((await api(`/content/${match.id}`)).item); } catch (err) { toast(err.message, 'error'); }
+  }
+  // Approving something that looks like a duplicate needs a second, deliberate click.
+  function approve(item) {
+    if (item.duplicateOf) { setPreview(null); setDupConfirm({ items: [item] }); } else decide(item, 'approved');
+  }
+  function approveBulk() {
+    const dups = items.filter(item => selected.includes(item.id) && item.duplicateOf);
+    if (dups.length) setDupConfirm({ bulk: true, items: dups }); else approveSelected();
+  }
+  async function confirmDuplicate() {
+    const { bulk, items: dups } = dupConfirm;
+    setDupConfirm(null);
+    if (bulk) await approveSelected(); else await decide(dups[0], 'approved');
+  }
 
   async function decide(item, decision, reviewNote = '') {
     setBusy(item.id);
@@ -92,7 +123,7 @@ export default function Review({ user, onChanged }) {
                 onClick={() => { setRejecting({ bulk: true }); setNote(''); }}>
                 Reject {selected.length || ''}
               </Button>
-              <Button variant="success" icon={Check} loading={busy === 'bulk'} disabled={!selected.length || Boolean(busy)} onClick={approveSelected}>
+              <Button variant="success" icon={Check} loading={busy === 'bulk'} disabled={!selected.length || Boolean(busy)} onClick={approveBulk}>
                 Approve {selected.length || ''}
               </Button>
             </div>
@@ -128,6 +159,7 @@ export default function Review({ user, onChanged }) {
                   {item.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{item.description}</p>}
                   {item.parent_title && <p className="mt-1 truncate text-xs font-medium text-brand-700">Adding to: {item.parent_title}</p>}
                   {item.type === 'link' && <p className="mt-1 truncate text-xs text-sky-700">{item.url}</p>}
+                  {item.duplicateOf && <DuplicateNote match={{ ...item.duplicateOf, isLink: item.type === 'link' }} onView={() => viewExisting(item.duplicateOf)} />}
                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                     <Avatar name={item.uploader} size="sm" />
                     <span>{item.uploader} · {timeAgo(item.created_at)}</span>
@@ -142,7 +174,7 @@ export default function Review({ user, onChanged }) {
                   <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-col lg:flex-row">
                     <Button variant="secondary" size="sm" icon={Eye} onClick={() => setPreview(item)}>Preview</Button>
                     <Button variant="secondary" size="sm" icon={X} onClick={() => { setRejecting(item); setNote(''); }} className="text-rose-600">Reject</Button>
-                    <Button variant="success" size="sm" icon={Check} loading={busy === item.id} disabled={Boolean(busy)} onClick={() => decide(item, 'approved')}>Approve</Button>
+                    <Button variant="success" size="sm" icon={Check} loading={busy === item.id} disabled={Boolean(busy)} onClick={() => approve(item)}>Approve</Button>
                   </div>
                 )}
               </div>
@@ -153,12 +185,35 @@ export default function Review({ user, onChanged }) {
 
       <PreviewModal item={preview} onClose={() => setPreview(null)} user={user}
         onEdited={(item, changes) => { setPreview(current => (current?.id === item.id ? { ...current, ...changes } : current)); toast('Details updated.'); reload(); }}
-        actions={preview && !isOwn(preview) && (
+        actions={preview && preview.status === 'pending' && !isOwn(preview) && (
           <>
             <Button variant="secondary" icon={X} className="text-rose-600" onClick={() => { setRejecting(preview); setPreview(null); }}>Reject</Button>
-            <Button variant="success" icon={Check} loading={busy === preview.id} onClick={() => decide(preview, 'approved')}>Approve</Button>
+            <Button variant="success" icon={Check} loading={busy === preview.id} onClick={() => approve(items.find(item => item.id === preview.id) || preview)}>Approve</Button>
           </>
         )} />
+
+      <Modal open={Boolean(dupConfirm)} onClose={() => setDupConfirm(null)} size="sm"
+        title={dupConfirm?.bulk ? 'Some selected items look like duplicates' : 'This looks like a duplicate'}
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setDupConfirm(null)}>Go back</Button>
+            <Button variant="success" className="whitespace-nowrap" onClick={confirmDuplicate}>
+              {dupConfirm?.bulk ? `Approve all ${selected.length}` : 'Approve anyway'}
+            </Button>
+          </>
+        )}>
+        <p className="mb-3 text-sm text-slate-600">
+          The same file or link is already in Kalpa Taru. Approve only if this is a different version; otherwise reject it.
+        </p>
+        <ul className="space-y-2">
+          {dupConfirm?.items.map(item => (
+            <li key={item.id} className="rounded-lg bg-amber-50 px-3 py-2 text-sm ring-1 ring-amber-200">
+              <p className="truncate font-medium text-slate-900">{item.title}</p>
+              <p className="text-xs text-amber-800">Matches “{item.duplicateOf.title}” · {WHERE[item.duplicateOf.status] || 'already uploaded'}</p>
+            </li>
+          ))}
+        </ul>
+      </Modal>
 
       <Modal open={Boolean(rejecting)} onClose={() => setRejecting(null)} size="sm"
         title={rejecting?.bulk ? `Reject ${selected.length} submission${selected.length === 1 ? '' : 's'}` : 'Reject submission'}
