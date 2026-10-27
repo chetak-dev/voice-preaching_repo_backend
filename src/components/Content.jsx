@@ -114,7 +114,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
         )}
         <div className="mt-auto flex items-center gap-1.5 pt-1.5 text-[10px] text-slate-500 sm:pt-2 sm:text-[11px]">
           <span className="min-w-0 truncate">{item.uploader}</span>
-          <span className="hidden shrink-0 sm:inline">· {timeAgo(item.created_at)}</span>
+          <span className="hidden shrink-0 2xl:inline">· {timeAgo(item.created_at)}</span>
           <span className="-mr-1 ml-auto flex shrink-0 items-center gap-0.5">
             {item.status === 'approved' && <ViewCount value={item.views} className="mr-0.5 [&_svg]:h-3 [&_svg]:w-3" />}
             {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} className="p-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5" />}

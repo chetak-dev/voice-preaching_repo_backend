@@ -5,7 +5,7 @@ import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareCo
 import { useMediaPlayer } from '../components/MediaPlayer.jsx';
 import { useEffect, useRef } from 'react';
 import {
-  Badge, Button, EmptyState, ErrorBanner, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useAsync, useToast,
+  Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useAsync, useToast,
 } from '../components/ui.jsx';
 import { LIBRARY_TYPE_KEY } from './Overview.jsx';
 import { onThumbnail } from '../uploads.js';
@@ -208,18 +208,17 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
     if (result === 'copied') toast('Link copied.');
   }
 
-  async function remove(item) {
-    if (!window.confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
-    try {
-      await api(`/content/${item.id}`, { method: 'DELETE' });
-      toast('Submission deleted.');
-      setPreview(null);
-      reload();
-      onChanged?.();
-    } catch (err) { toast(err.message, 'error'); }
+  const [removing, setRemoving] = useState(null);
+  const remove = item => setRemoving(item);
+  function removed() {
+    toast('Content removed.');
+    setRemoving(null);
+    setPreview(null);
+    reload();
+    onChanged?.();
   }
 
-  const canDelete = item => user.role === 'site_admin' || (item.uploader_id === user.id && item.status !== 'approved');
+  const canDelete = () => user.role === 'site_admin';
 
   return (
     <div>
@@ -291,7 +290,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
             <ContentCard key={item.id} item={item} onPreview={openItem} onShare={share} showStatus={scope === 'mine'}
               onBookmark={item.status === 'approved' && !item.parent_id ? toggleBookmark : undefined}
               footer={scope === 'mine' && canDelete(item) && (
-                <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} className="text-rose-600 hover:bg-rose-50 hover:text-rose-700">Delete</Button>
+                <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} className="text-rose-600 hover:bg-rose-50 hover:text-rose-700">Remove</Button>
               )} />
           ))}
         </div>
@@ -328,7 +327,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                 <Badge tone={meta.tone} icon={meta.icon} className="hidden w-24 justify-center sm:inline-flex">{meta.label}</Badge>
                 {scope === 'mine' && <Badge tone={STATUS_META[item.status].tone}>{STATUS_META[item.status].label}</Badge>}
                 {scope === 'mine' && canDelete(item) && (
-                  <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} aria-label="Delete" className="text-rose-600 hover:bg-rose-50" />
+                  <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} aria-label="Remove" className="text-rose-600 hover:bg-rose-50" />
                 )}
               </div>
             );
@@ -338,9 +337,56 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
       <PreviewModal item={preview} onShare={share} onClose={() => setPreview(null)} user={user}
         onAddTo={target => { setPreview(null); onAddTo?.(target); }}
-        actions={preview && user.role === 'site_admin' && scope === 'library' && (
+        actions={preview && canDelete() && (
           <Button variant="secondary" icon={Trash2} onClick={() => remove(preview)} className="text-rose-600">Remove</Button>
         )} />
+      <RemoveContentModal item={removing} onClose={() => setRemoving(null)} onRemoved={removed} />
     </div>
+  );
+}
+
+const CONFIRM_WORD = 'REMOVE';
+
+function RemoveContentModal({ item, onClose, onRemoved }) {
+  const toast = useToast();
+  const [reason, setReason] = useState('');
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setReason(''); setTyped(''); }, [item?.id]);
+  const ready = reason.trim().length >= 5 && typed.trim() === CONFIRM_WORD;
+  async function submit(event) {
+    event.preventDefault();
+    if (!ready || busy) return;
+    setBusy(true);
+    try {
+      await api(`/content/${item.id}`, { method: 'DELETE', body: { reason: reason.trim() } });
+      onRemoved();
+    } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  }
+  return (
+    <Modal open={Boolean(item)} onClose={busy ? () => {} : onClose} size="sm" title="Remove content permanently?"
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="danger" icon={Trash2} type="submit" form="remove-content-form" loading={busy} disabled={!ready}>Remove</Button>
+        </>
+      )}>
+      {item && (
+        <form id="remove-content-form" onSubmit={submit} className="space-y-4">
+          <div className="rounded-xl bg-rose-50 px-3.5 py-3 text-sm text-rose-800">
+            <p><span className="font-semibold">{item.title}</span> will be deleted from the library and from Google Drive{item.parts > 0 ? `, together with the ${item.parts} ${item.parts === 1 ? 'file' : 'files'} added to it` : ''}. This cannot be undone.</p>
+          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-slate-700">Reason for removing</span>
+            <textarea className="input min-h-[80px]" value={reason} onChange={e => setReason(e.target.value)} maxLength={500}
+              placeholder="Explain why this content is being removed (saved in the activity log)" autoFocus />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-slate-700">Type <span className="font-mono font-bold text-rose-600">{CONFIRM_WORD}</span> to confirm</span>
+            <input className="input font-mono" value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off" spellCheck={false} aria-label={`Type ${CONFIRM_WORD} to confirm`} />
+          </label>
+        </form>
+      )}
+    </Modal>
   );
 }

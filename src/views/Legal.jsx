@@ -46,7 +46,7 @@ const PRIVACY = [
     <p>We use one essential, secure, HTTP-only cookie to keep you signed in. We do not use analytics, advertising or tracking cookies.</p>
   </>],
   ['retention', 'Retention and deletion', <>
-    <p>We keep your account and content for as long as your account is active. Content you delete is removed from the library and from storage. To delete your account or get a copy of your data, {contact}. We may keep limited records, such as moderation logs, when we need them for security or legal reasons.</p>
+    <p>We keep your account and content for as long as your account is active. Content removed by a site administrator is deleted from the library and from storage; to have your content removed, {contact}. To delete your account or get a copy of your data, {contact}. We may keep limited records, such as moderation logs, when we need them for security or legal reasons.</p>
   </>],
   ['rights', 'Your choices and rights', <>
     <p>You can ask to access, correct or delete your personal information, or object to how we use it. Depending on where you live, you may have further rights under local data-protection law. To make a request, {contact}.</p>

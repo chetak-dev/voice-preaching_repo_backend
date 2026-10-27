@@ -143,7 +143,7 @@ export function createApp(overrides = {}) {
     next();
   });
   app.use('/api', h(async (req, res, next) => { await db.ready; next(); }));
-  app.use('/api', rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false,
+  app.use('/api', rateLimit({ windowMs: 60_000, limit: config.apiRateLimit || 240, standardHeaders: 'draft-8', legacyHeaders: false,
     // Upload chunks are bounded by the upload size limit, so they don't count towards the request rate.
     skip: req => req.method === 'PUT' && req.path.startsWith('/uploads/'),
     message: { error: 'Too many requests. Please try again in a minute.' } }));
@@ -375,6 +375,10 @@ export function createApp(overrides = {}) {
     const typeRows = await db.all(`SELECT type, count(*) AS files, COALESCE(sum(size), 0) AS bytes FROM content
       WHERE status = 'approved' AND visibility = 'public' GROUP BY type`);
     const types = Object.fromEntries(typeRows.map(row => [row.type, { files: Number(row.files), bytes: Number(row.bytes) }]));
+    if (!isReviewer(req.user)) {
+      res.json({ approved, contributions, pending, members, types: Object.fromEntries(Object.entries(types).map(([type, info]) => [type, { files: info.files }])) });
+      return;
+    }
     const drives = (await db.all('SELECT * FROM drives WHERE enabled = 1')).filter(node => isConnected(node, config));
     const measured = drives.filter(node => node.quota_limit != null);
     const stored = await db.get("SELECT COALESCE(sum(size), 0) AS bytes FROM content WHERE status != 'rejected'");
@@ -659,17 +663,17 @@ export function createApp(overrides = {}) {
     res.json({ views: await count('SELECT count(*) AS n FROM content_views WHERE content_id = ?', item.id) });
   }));
   app.delete('/api/content/:id', h(async (req, res) => {
+    if (req.user.role !== 'site_admin') throw fail(403, 'Only site admins can remove content.');
     const { item } = await getContent(req);
-    const isAdmin = req.user.role === 'site_admin';
-    const owner = item.uploader_id === req.user.id && item.status !== 'approved';
-    if (!isAdmin && !owner) throw fail(403, 'Only site admins can remove published content.');
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (reason.length < 5) throw fail(400, 'Write a reason (at least 5 characters) before removing content.');
+    if (reason.length > 500) throw fail(400, 'Keep the reason under 500 characters.');
 
     const token = randomUUID();
     const now = Date.now();
     const claim = await db.run(`UPDATE content SET deletion_token = ?, deletion_lock_expires = ?
-      WHERE id = ? AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)
-      AND (? = 1 OR (uploader_id = ? AND status != 'approved'))`,
-    token, now + 5 * 60_000, item.id, now, isAdmin ? 1 : 0, req.user.id);
+      WHERE id = ? AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
+    token, now + 5 * 60_000, item.id, now);
     if (!claim.changes) throw fail(409, 'This content is already being removed or its status changed. Refresh and try again.');
 
     const removeStored = async (row, release) => {
@@ -697,7 +701,7 @@ export function createApp(overrides = {}) {
     await db.run('DELETE FROM thumbnails WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);
     if (!deleted.changes) throw fail(409, 'The content changed while it was being removed. Refresh and try again.');
-    await audit(db, req.user.id, 'Deleted content', item.title);
+    await audit(db, req.user.id, 'Deleted content', `${item.title} — Reason: ${reason}`);
     res.json({ ok: true });
   }));
   // Thumbnails are generated in the uploader's browser (a frame, first page or cover) and stored as small images.

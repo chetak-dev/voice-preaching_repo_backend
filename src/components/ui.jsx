@@ -48,6 +48,7 @@ export function LogoMark({ className }) {
 }
 
 export const APP_NAME = 'Kalpa Taru';
+export const APP_ORG = 'ISKCON Brahmapur';
 
 export function Logo({ size = 'md', light = false, textClassName }) {
   const box = size === 'lg' ? 'h-11 w-11 rounded-2xl' : size === 'sm' ? 'h-8 w-8 rounded-xl' : 'h-9 w-9 rounded-xl';
@@ -57,8 +58,17 @@ export function Logo({ size = 'md', light = false, textClassName }) {
       <div className={cx('leading-none', textClassName)}>
         <p className={cx('whitespace-nowrap font-extrabold uppercase tracking-[0.12em]', size === 'lg' ? 'text-xl' : 'text-base',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
+        <p className={cx('mt-1 whitespace-nowrap font-medium', size === 'lg' ? 'text-xs' : 'text-[10px]', light ? 'text-white/70' : 'text-slate-500')}>{APP_ORG}</p>
       </div>
     </div>
+  );
+}
+
+export function MadeWithLove({ className }) {
+  return (
+    <p className={cx('flex items-center justify-center gap-1 whitespace-nowrap', className)}>
+      Made with <span className="text-rose-500" role="img" aria-label="love">❤</span> by {APP_ORG}
+    </p>
   );
 }
 
@@ -173,6 +183,7 @@ export function SplashLoader() {
       </div>
       <div className="text-center">
         <p className="bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-lg font-extrabold uppercase tracking-[0.12em] text-transparent">{APP_NAME}</p>
+        <p className="mt-1 text-xs font-medium text-slate-500">{APP_ORG}</p>
       </div>
       <div className="h-1 w-40 overflow-hidden rounded-full bg-brand-100">
         <div className="h-full w-2/5 animate-load-bar rounded-full bg-voice" />

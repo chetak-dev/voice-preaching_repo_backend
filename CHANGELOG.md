@@ -2,6 +2,14 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.4.0 — 2026-10-27
+
+- **Removing content is now site-admin only and deliberate.** Members and org admins can no longer delete anything, including their own pending submissions. A site admin must write a reason (at least 5 characters) and type REMOVE to confirm. The reason is saved in the activity log.
+- **Storage info is for admins only.** The Overview page (storage use and sizes by type) is hidden from members, and the server no longer sends storage figures or sizes to them.
+- **Sign out is a proper button** in the desktop sidebar and the phone menu.
+- "ISKCON Brahmapur" appears under the Kalpa Taru name (sidebar, phone header, sign-in page, loading screen), and "Made with ❤ by ISKCON Brahmapur" sits above the Privacy and Terms links.
+- Content cards show the upload time only on wide screens, so the uploader name has room.
+
 ## 1.3.1 — 2026-10-27
 
 - Content cards: the view count, share and save buttons now sit together, smaller, on the bottom line, so the title gets the full card width.

@@ -6,7 +6,7 @@ import { api } from './api.js';
 import {
   cancelAll as cancelUploads, getJobs as getUploadJobs, isActive as isUploadActive, resumeSaved, subscribe as subscribeUploads,
 } from './uploads.js';
-import { Avatar, Badge, Button, Logo, Modal, ROLE_META, SplashLoader, ToastProvider, cx, useToast } from './components/ui.jsx';
+import { APP_ORG, Avatar, Badge, Button, Logo, MadeWithLove, Modal, ROLE_META, SplashLoader, ToastProvider, cx, useToast } from './components/ui.jsx';
 import { PersistentMediaPlayer, useMediaPlayer } from './components/MediaPlayer.jsx';
 import UploadTray from './components/UploadTray.jsx';
 import Activity from './views/Activity.jsx';
@@ -22,7 +22,7 @@ import Upload from './views/Upload.jsx';
 
 const ITEMS = {
   library: { label: 'Library', icon: FolderOpen, tone: 'bg-violet-500/15 text-violet-300', soft: 'bg-violet-50 text-violet-600' },
-  overview: { label: 'Overview', icon: PieChart, tone: 'bg-teal-500/15 text-teal-300', soft: 'bg-teal-50 text-teal-600' },
+  overview: { label: 'Overview', icon: PieChart, roles: ['site_admin', 'org_admin'], tone: 'bg-teal-500/15 text-teal-300', soft: 'bg-teal-50 text-teal-600' },
   upload: { label: 'Contribute', icon: UploadCloud, tone: 'bg-pink-500/15 text-pink-300', soft: 'bg-pink-50 text-pink-600' },
   mine: { label: 'My submissions', short: 'Mine', icon: FileClock, tone: 'bg-sky-500/15 text-sky-300', soft: 'bg-sky-50 text-sky-600' },
   saved: { label: 'Saved', icon: Bookmark, tone: 'bg-amber-500/15 text-amber-300', soft: 'bg-amber-50 text-amber-600' },
@@ -187,13 +187,22 @@ function Shell({ user, config, onSignOut }) {
             </div>
             <div className={cx('flex items-center gap-1', reveal)}>
               <PointsPill points={points} onClick={() => navigate('leaderboard')} />
-              <button type="button" onClick={askSignOut} className="rounded-lg p-2 text-white/60 transition hover:bg-white/10 hover:text-white" aria-label="Sign out" title="Sign out">
-                <LogOut className="h-4 w-4" />
-              </button>
             </div>
           </div>
         </div>
-        <div className="relative mb-3 w-20 space-y-1 text-center text-[10px] text-white/40">
+        <div className="relative w-72 px-3 pb-3">
+          <button type="button" onClick={askSignOut} title="Sign out"
+            className="flex w-14 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-rose-200 ring-1 ring-inset ring-rose-400/30 transition-[width,background-color] duration-200 hover:bg-rose-500/15 hover:text-white group-hover/side:w-full group-focus-within/side:w-full">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300"><LogOut className="h-4 w-4" /></span>
+            <span className={cx('whitespace-nowrap', reveal)}>Sign out</span>
+          </button>
+        </div>
+        <div className="relative mb-3 w-20 space-y-1 text-center text-[10px] text-white/40 transition-[width] duration-200 group-hover/side:w-72 group-focus-within/side:w-72">
+          <p className="flex items-center justify-center gap-1 whitespace-nowrap">
+            <span className="hidden group-hover/side:inline group-focus-within/side:inline">Made with</span>
+            <span className="text-rose-400" role="img" aria-label="love">❤</span>
+            <span className="hidden group-hover/side:inline group-focus-within/side:inline">by {APP_ORG}</span>
+          </p>
           <p className="flex justify-center gap-1.5">
             <a href="#/privacy" className="transition hover:text-white">Privacy</a>·<a href="#/terms" className="transition hover:text-white">Terms</a>
           </p>
@@ -278,11 +287,10 @@ function Shell({ user, config, onSignOut }) {
                 })}
               </div>
             )}
-            <div className="border-t border-slate-100 p-3">
-              <button type="button" onClick={askSignOut} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-rose-600 hover:bg-rose-50">
-                <LogOut className="h-5 w-5" /> Sign out
-              </button>
-              <p className="flex justify-center gap-2 px-3 pt-2 text-[11px] text-slate-400">
+            <div className="border-t border-slate-100 p-4">
+              <Button variant="danger" icon={LogOut} onClick={askSignOut} className="w-full justify-center">Sign out</Button>
+              <MadeWithLove className="pt-4 text-xs text-slate-500" />
+              <p className="flex justify-center gap-2 px-3 pt-1.5 text-[11px] text-slate-400">
                 <a href="#/privacy" className="font-medium text-slate-500 hover:text-brand-700">Privacy Policy</a>·
                 <a href="#/terms" className="font-medium text-slate-500 hover:text-brand-700">Terms & Conditions</a>·
                 <span>{VERSION_LABEL}</span>

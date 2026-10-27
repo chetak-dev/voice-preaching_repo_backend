@@ -16,7 +16,7 @@ let dataDir;
 
 before(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), 'voice-test-'));
-  app = createApp({ production: false, dataDir, databaseUrl: 'file::memory:', origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: ['owner@example.test'] });
+  app = createApp({ production: false, dataDir, databaseUrl: 'file::memory:', origin: ORIGIN, googleClientId: '', googleClientSecret: '', siteAdmins: ['owner@example.test'], apiRateLimit: 2000 });
   await app.locals.ready;
   const insert = (...values) => app.locals.db.run('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)', ...values);
   const hashed = hashPassword(TEST_PASSWORD);
@@ -35,6 +35,7 @@ after(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+const REASON = { reason: 'Test cleanup' };
 const ACCOUNTS = { site_admin: 'admin@example.test', org_admin: 'orgadmin@example.test', user: 'member@example.test' };
 
 function post(url, body, origin = ORIGIN) {
@@ -126,7 +127,11 @@ test('rejections require a note and are visible to the uploader', async () => {
   const item = mine.json.items.find(entry => entry.id === json.id);
   assert.equal(item.status, 'rejected');
   assert.equal(item.review_note, 'Please add a description.');
-  assert.equal((await user(`/api/content/${json.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await user(`/api/content/${json.id}`, { method: 'DELETE', body: REASON })).status, 403, 'members cannot remove content');
+  assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE' })).status, 400, 'a reason is required');
+  assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE', body: { reason: 'no' } })).status, 400);
+  assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE', body: REASON })).status, 200);
+  assert.ok(JSON.stringify((await admin('/api/audit')).json).includes('Reason: Test cleanup'));
 });
 
 test('uploads are verified and stored pending approval', async () => {
@@ -228,9 +233,9 @@ test('an active deletion claim blocks approval and duplicate deletion', async ()
   const { json: item } = await user('/api/content', { method: 'POST', body: { title: 'Deletion race', url: 'https://example.org/deletion-race' } });
   await app.locals.db.run('UPDATE content SET deletion_token = ?, deletion_lock_expires = ? WHERE id = ?', 'test-lock', Date.now() + 60_000, item.id);
   assert.equal((await admin(`/api/content/${item.id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 409);
-  assert.equal((await user(`/api/content/${item.id}`, { method: 'DELETE' })).status, 409);
+  assert.equal((await admin(`/api/content/${item.id}`, { method: 'DELETE', body: REASON })).status, 409);
   await app.locals.db.run('UPDATE content SET deletion_lock_expires = ? WHERE id = ?', Date.now() - 1, item.id);
-  assert.equal((await user(`/api/content/${item.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/content/${item.id}`, { method: 'DELETE', body: REASON })).status, 200);
 });
 
 test('people can sign up, sign in and are rejected with bad credentials', async () => {
@@ -309,7 +314,7 @@ test('org admins can approve or reject content, and nothing else', async () => {
   assert.equal((await orgAdmin('/api/users')).status, 403);
   assert.equal((await orgAdmin('/api/audit')).status, 403);
   assert.equal((await orgAdmin('/api/users/test-user', { method: 'PATCH', body: { role: 'org_admin' } })).status, 403);
-  assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/content/${json.id}`, { method: 'DELETE', body: REASON })).status, 200);
 });
 
 test('approved content visibility defaults to public and private items stay out of community lists and file routes', async () => {
@@ -442,10 +447,13 @@ test('serverless hosts refuse file uploads until a Google Drive is connected', a
     serverless.locals.db.close();
   }
 });
-test('overview reports approved items and size per type plus storage totals', async () => {
+test('overview shows type counts to everyone and storage figures only to admins', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');
-  const before = (await user('/api/overview')).json;
+  const mine = (await user('/api/overview')).json;
+  assert.equal(mine.storage, undefined, 'members do not see storage');
+  assert.ok(Object.values(mine.types).every(info => info.bytes === undefined), 'members do not see sizes');
+  const before = (await admin('/api/overview')).json;
   assert.ok(before.storage && typeof before.storage.content === 'number');
   const linksBefore = before.types.link?.files || 0;
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
@@ -453,11 +461,11 @@ test('overview reports approved items and size per type plus storage totals', as
   const done = await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png });
   const link = await user('/api/content', { method: 'POST', body: { title: 'Stats link', url: 'https://example.org/stats' } });
   const imagesBefore = before.types.image || { files: 0, bytes: 0 };
-  assert.equal((await user('/api/overview')).json.types.image?.files || 0, imagesBefore.files, 'pending items are not counted');
+  assert.equal((await admin('/api/overview')).json.types.image?.files || 0, imagesBefore.files, 'pending items are not counted');
   for (const id of [done.json.id, link.json.id]) {
     assert.equal((await admin(`/api/content/${id}/review`, { method: 'POST', body: { decision: 'approved' } })).status, 200);
   }
-  const after = (await user('/api/overview')).json;
+  const after = (await admin('/api/overview')).json;
   assert.deepEqual(after.types.image, { files: imagesBefore.files + 1, bytes: imagesBefore.bytes + png.length });
   assert.equal(after.types.link.files, linksBefore + 1);
   assert.equal(after.storage.drives, 0);
@@ -476,18 +484,19 @@ test('views count each member once and only for approved content', async () => {
   assert.equal((await admin(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 2);
   const listed = (await user('/api/content?scope=library')).json.items.find(item => item.id === link.json.id);
   assert.equal(listed.views, 2);
-  assert.equal((await admin(`/api/content/${link.json.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/content/${link.json.id}`, { method: 'DELETE', body: REASON })).status, 200);
 });
 
-test('uploaders cannot delete their submissions once approved', async () => {
+test('only site admins can remove content', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');
   const pending = (await user('/api/content', { method: 'POST', body: { title: 'Withdraw me', url: 'https://example.org/w' } })).json;
-  assert.equal((await user(`/api/content/${pending.id}`, { method: 'DELETE' })).status, 200, 'pending items can be withdrawn');
+  assert.equal((await user(`/api/content/${pending.id}`, { method: 'DELETE', body: REASON })).status, 403, 'only site admins remove content');
+  assert.equal((await admin(`/api/content/${pending.id}`, { method: 'DELETE', body: REASON })).status, 200);
   const approved = (await user('/api/content', { method: 'POST', body: { title: 'Keep me', url: 'https://example.org/k' } })).json;
   await admin(`/api/content/${approved.id}/review`, { method: 'POST', body: { decision: 'approved' } });
   assert.equal((await user(`/api/content/${approved.id}`, { method: 'DELETE' })).status, 403);
-  assert.equal((await admin(`/api/content/${approved.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/content/${approved.id}`, { method: 'DELETE', body: REASON })).status, 200);
 });
 
 test('leaderboard awards points per approved submission and shows the top 10 to everyone', async () => {
@@ -508,7 +517,7 @@ test('leaderboard awards points per approved submission and shows the top 10 to 
   assert.ok(after.top.some(entry => entry.id === after.me.id && entry.rank >= 1));
   assert.ok(after.top.every((entry, i, all) => i === 0 || all[i - 1].points >= entry.points));
   assert.equal((await (await signIn('org_admin'))('/api/leaderboard')).status, 200);
-  for (const id of ids) await admin(`/api/content/${id}`, { method: 'DELETE' });
+  for (const id of ids) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
 });
 
 test('files and links can be added to uploads, by the owner and by others, and each addition needs approval', async () => {
@@ -543,7 +552,7 @@ test('files and links can be added to uploads, by the owner and by others, and e
   assert.equal((await viewer('/api/content', { method: 'POST', body: { title: 'Nested', url: 'https://example.org/n', parentId: added.json.id } })).status, 400);
   assert.equal((await viewer(`/api/content/${added.json.id}/bookmark`, { method: 'POST' })).status, 400);
 
-  assert.equal((await admin(`/api/content/${parent.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/content/${parent.id}`, { method: 'DELETE', body: REASON })).status, 200);
   assert.equal((await viewer(`/api/content/${added.json.id}/file`)).status, 404, 'deleting an upload removes its additions');
   assert.equal((await user('/api/content?scope=mine')).json.items.filter(item => item.parent_id === parent.id).length, 0);
 });
@@ -557,7 +566,7 @@ test('rejecting an upload also rejects its pending additions', async () => {
   const mine = (await user('/api/content?scope=mine')).json.items.find(item => item.id === part.id);
   assert.equal(mine.status, 'rejected');
   assert.equal((await user('/api/content', { method: 'POST', body: { title: 'Late', url: 'https://example.org/l', parentId: parent.id } })).status, 409);
-  await user(`/api/content/${parent.id}`, { method: 'DELETE' });
+  await admin(`/api/content/${parent.id}`, { method: 'DELETE', body: REASON });
 });
 
 test('thumbnails are validated images that only the uploader or an admin can set, and are removed with the content', async () => {
@@ -580,6 +589,6 @@ test('thumbnails are validated images that only the uploader or an admin can set
   assert.equal((await viewer(`/api/content/${item.id}/thumbnail`)).status, 200);
   assert.equal((await viewer(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: jpeg, type: 'image/jpeg' })).status, 403);
   assert.equal((await admin(`/api/content/${item.id}/thumbnail`, { method: 'PUT', raw: jpeg, type: 'image/jpeg' })).status, 200);
-  assert.equal((await admin(`/api/content/${item.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`/api/content/${item.id}`, { method: 'DELETE', body: REASON })).status, 200);
   assert.equal((await app.locals.db.get('SELECT count(*) AS n FROM thumbnails WHERE content_id = ?', item.id)).n, 0);
 });

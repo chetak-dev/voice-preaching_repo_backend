@@ -7,12 +7,12 @@ A professional content-sharing platform for communities. Members contribute **im
 - **Roles**
   | Role | Can do |
   |------|--------|
-  | **Site admin** | Approve/reject all submissions, appoint or remove **org admins**, suspend/reactivate accounts, remove content, manage Google Drive storage, view the activity log |
+  | **Site admin** | Approve/reject all submissions, appoint or remove **org admins**, suspend/reactivate accounts, remove content (only site admins can, and must give a reason and type REMOVE to confirm), manage Google Drive storage, view the activity log |
   | **Org admin** | Approve or reject submissions (except their own), plus everything a member can do. Nothing else. |
   | **Member** | Browse the library, save items, contribute content, track their submissions |
 - **Approval workflow** — uploads from members start as *Pending* and only appear in the library once a site admin or org admin approves them. Uploads from site admins and org admins are published immediately. Rejections require a note, which the contributor sees under **My submissions**.
 - **Thumbnails and preview** — the browser generates a thumbnail for every file it uploads: image, video frame, PDF first page, audio cover art, Office document or text. Thumbnails are stored in the database. Items uploaded before this feature get thumbnails when an admin or the uploader opens the library. Opening an item shows its full content before download: every PDF page, Word text, PowerPoint slides, Excel sheets, text files, and playable video, audio and YouTube links. Files over 50MB (except PDFs and media, which stream) must be downloaded to read.
-- **Overview** — storage use and totals by content type.
+- **Overview** (admins only) — storage use and totals by content type. Members never see storage figures.
 - **Adding to an upload** — open any item and choose **Add files** to attach more files or links to it. Contributors can add to their own upload while it is pending or approved; anyone can add to an approved upload. Each addition is reviewed separately, earns its contributor points once approved, and is removed if the upload is deleted. Rejecting an upload also rejects its pending additions.
 - **Multi-Google-Drive storage** — connect as many Drives as you need; uploads are routed automatically (see below).
 - Sign up / sign in with email + password or Google (one sign-in page for every role), scrypt-hashed passwords, file signature verification, rate limiting, CSRF origin checks, encrypted refresh tokens, audit log.

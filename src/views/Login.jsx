@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Eye, EyeOff, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
 import { api } from '../api.js';
-import { Button, Logo, cx } from '../components/ui.jsx';
+import { Button, Logo, MadeWithLove, cx } from '../components/ui.jsx';
 
 const FEATURES = [
   [ShieldCheck, 'Moderated by design', 'Every contribution is reviewed by an admin before it is published.', 'from-emerald-400 to-teal-500'],
@@ -164,7 +164,8 @@ export default function Login({ config, onSignedIn }) {
             <Button type="submit" size="lg" className="w-full" loading={busy} disabled={!canSubmit}>
               {signup ? 'Create account' : 'Sign in'}
             </Button>
-            <p className="pt-1 text-center text-xs leading-relaxed text-slate-500">
+            <MadeWithLove className="pt-2 text-xs font-medium text-slate-500" />
+            <p className="text-center text-xs leading-relaxed text-slate-500">
               By {signup ? 'creating an account' : 'continuing'}, you agree to our{' '}
               <a href="#/terms" className="font-medium text-brand-700 hover:underline">Terms & Conditions</a> and{' '}
               <a href="#/privacy" className="font-medium text-brand-700 hover:underline">Privacy Policy</a>.
