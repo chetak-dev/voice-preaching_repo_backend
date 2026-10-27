@@ -56,9 +56,9 @@ export function Logo({ size = 'md', light = false, textClassName }) {
     <div className="flex items-center gap-2.5">
       <LogoMark className={cx('shrink-0 shadow-glow', box, light && 'ring-2 ring-white/30')} />
       <div className={cx('flex flex-col justify-center gap-[5px] leading-none', textClassName)}>
-        <p className={cx('whitespace-nowrap font-brand font-bold uppercase leading-none tracking-[0.05em]', size === 'lg' ? 'text-[22px]' : size === 'sm' ? 'text-[17px]' : 'text-[18px]',
+        <p className={cx('whitespace-nowrap font-brand font-semibold uppercase leading-none tracking-[0.08em]', size === 'lg' ? 'text-[22px]' : size === 'sm' ? 'text-[17px]' : 'text-[18px]',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
-        <p className={cx('whitespace-nowrap uppercase leading-none', 'font-medium tracking-[0.125em]', size === 'lg' ? 'text-[12px]' : size === 'sm' ? 'text-[9.5px]' : 'text-[10px]',
+        <p className={cx('whitespace-nowrap uppercase leading-none', 'font-medium tracking-[0.1em]', size === 'lg' ? 'text-[12px]' : size === 'sm' ? 'text-[9.5px]' : 'text-[10px]',
           light ? 'text-white/70' : 'text-slate-500')}>{APP_ORG}</p>
       </div>
     </div>

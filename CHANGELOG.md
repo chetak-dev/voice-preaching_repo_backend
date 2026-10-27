@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.5.6
+
+- "Kalpa Taru" now uses the Poppins font (replacing Cinzel).
+
 ## 1.5.5
 
 - "Kalpa Taru" now uses the classical Cinzel typeface.

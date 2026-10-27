@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        brand: ['Cinzel', 'Georgia', 'serif'],
+        brand: ['Poppins', 'Inter', 'ui-sans-serif', 'sans-serif'],
         sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
       },
       colors: {
