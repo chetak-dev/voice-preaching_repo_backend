@@ -117,6 +117,7 @@ export default function Storage() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(null);
+  const [removing, setRemoving] = useState(null);
 
   async function run(id, action, success) {
     setBusy(id);
@@ -181,10 +182,12 @@ export default function Storage() {
                     onClick={() => run(`toggle-${node.id}`, () => api(`/storage/${node.id}`, { method: 'PATCH', body: { enabled: !node.enabled } }), node.enabled ? 'Drive paused for new uploads.' : 'Drive resumed.')}>
                     {node.enabled ? 'Pause' : 'Resume'}
                   </Button>
-                  {node.fileCount === 0 && (
-                    <Button size="sm" variant="ghost" icon={Trash2} className="ml-auto text-rose-600 hover:bg-rose-50" aria-label="Remove"
-                      onClick={() => window.confirm(`Remove "${node.name}"?`) && run(`del-${node.id}`, () => api(`/storage/${node.id}`, { method: 'DELETE' }), 'Storage destination removed.')} />
-                  )}
+                  <Button size="sm" variant="ghost" icon={Trash2} aria-label="Remove Drive" aria-disabled={node.fileCount > 0}
+                    title={node.fileCount > 0 ? `Can’t remove: ${node.fileCount} ${node.fileCount === 1 ? 'item is' : 'items are'} stored on this Drive` : 'Remove this Drive'}
+                    className={cx('ml-auto', node.fileCount > 0 ? 'cursor-not-allowed !text-slate-300 hover:!bg-transparent' : '!text-rose-600 hover:!bg-rose-50')}
+                    onClick={() => (node.fileCount > 0
+                      ? toast(`“${node.name}” still holds ${node.fileCount} ${node.fileCount === 1 ? 'item' : 'items'}. Remove ${node.fileCount === 1 ? 'it' : 'them'} from the library first, or pause the Drive instead.`, 'error')
+                      : setRemoving(node))} />
                 </div>
               </div>
             ))}
@@ -211,6 +214,20 @@ export default function Storage() {
         </>
       )}
 
+      <Modal open={Boolean(removing)} onClose={() => setRemoving(null)} size="sm" title="Remove this Drive?"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setRemoving(null)} disabled={busy === `del-${removing?.id}`}>Cancel</Button>
+            <Button variant="danger" icon={Trash2} loading={busy === `del-${removing?.id}`}
+              onClick={async () => { if (await run(`del-${removing.id}`, () => api(`/storage/${removing.id}`, { method: 'DELETE' }), 'Drive removed.')) setRemoving(null); }}>
+              Remove
+            </Button>
+          </>
+        )}>
+        <p className="text-sm text-slate-600">
+          <span className="font-semibold text-slate-900">{removing?.name}</span> will be disconnected from Kalpa Taru. Nothing in the Google Drive itself is deleted.
+        </p>
+      </Modal>
       <Modal open={adding} onClose={() => setAdding(false)} size="lg" title="Add Google Drive"
         footer={(
           <>

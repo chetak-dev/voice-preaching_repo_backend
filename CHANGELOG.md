@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.3
+
+- Storage: every Drive now shows a delete icon. It only works when no items are stored on that Drive; otherwise it is greyed out and explains why. Removing asks for confirmation in a dialog.
+
 ## 1.7.2
 
 - Profile menu and Sign out moved to the top right. On desktop, a top bar shows points, notifications and the profile menu (name, email, role, theme, Sign out); on phones the avatar at the top right opens the same menu.
