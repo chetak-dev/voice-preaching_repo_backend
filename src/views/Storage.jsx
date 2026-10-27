@@ -3,10 +3,78 @@ import {
   AlertTriangle, CheckCircle2, Circle, DatabaseBackup, HardDrive, Pause, Play, Plug, Plus, RefreshCw, Server, Trash2,
 } from 'lucide-react';
 import { api } from '../api.js';
-import { Badge, Button, ErrorBanner, Modal, PageHeader, Spinner, cx, formatBytes, timeAgo, useAsync, useToast } from '../components/ui.jsx';
+import { Badge, Button, ErrorBanner, Modal, PageHeader, STATUS_META, Spinner, cx, formatBytes, timeAgo, useAsync, useToast } from '../components/ui.jsx';
 
 const folderIdFrom = value => value.trim().match(/folders\/([A-Za-z0-9_-]+)/)?.[1] || value.trim();
 const EMPTY_FORM = { name: '', folderId: '', kind: 'oauth' };
+
+// Lists everything stored on a Drive, including items the library hides (pending, rejected, private, additions).
+function DriveItems({ node, onClose, onChanged }) {
+  const toast = useToast();
+  const { data, loading, error, reload } = useAsync(() => api(`/storage/${node.id}/items`), [node.id]);
+  const [target, setTarget] = useState(null);
+  const [reason, setReason] = useState('');
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ready = reason.trim().length >= 5 && confirmText.trim().toUpperCase() === 'REMOVE';
+  const pick = item => { setTarget(item); setReason(''); setConfirmText(''); };
+  async function remove() {
+    setBusy(true);
+    try {
+      await api(`/content/${target.id}`, { method: 'DELETE', body: { reason: reason.trim() } });
+      toast(`Removed “${target.title}”.`);
+      setTarget(null);
+      await reload();
+      onChanged();
+    } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  }
+  const items = data?.items || [];
+  return (
+    <Modal open onClose={onClose} size="md" title={`Items on ${node.name}`}
+      description="Remove these to empty the Drive. This includes items the library hides: pending, rejected, private and added files.">
+      {error && <ErrorBanner error={error} onRetry={reload} />}
+      {loading && !data && <Spinner />}
+      {data && !items.length && <p className="text-sm text-slate-600">Nothing is stored on this Drive any more. You can remove it now.</p>}
+      {items.length > 0 && !target && (
+        <ul className="divide-y divide-slate-100">
+          {items.map(item => {
+            const status = STATUS_META[item.status];
+            return (
+              <li key={item.id} className="flex items-center gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-900">{item.title}</p>
+                  <p className="truncate text-xs text-slate-500">
+                    {[item.uploader, item.parentTitle && `Added to “${item.parentTitle}”`, item.visibility === 'private' && 'Private', item.size ? formatBytes(item.size) : null, timeAgo(item.createdAt)].filter(Boolean).join(' · ')}
+                  </p>
+                </div>
+                {status && <Badge tone={status.tone}>{status.label}</Badge>}
+                <Button size="sm" variant="ghost" icon={Trash2} className="!text-rose-600 hover:!bg-rose-50" aria-label={`Remove ${item.title}`} onClick={() => pick(item)} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {target && (
+        <div className="space-y-3">
+          <p className="text-sm text-slate-700">Remove <span className="font-semibold text-slate-900">{target.title}</span>? It is removed from Kalpa Taru, and its file is deleted from the Drive if the Drive is connected. This cannot be undone.</p>
+          <div>
+            <label className="label" htmlFor="drive-item-reason">Reason</label>
+            <textarea id="drive-item-reason" rows={2} maxLength={500} className="input resize-y" value={reason} onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Test upload, clearing the test Drive" />
+          </div>
+          <div>
+            <label className="label" htmlFor="drive-item-confirm">Type REMOVE to confirm</label>
+            <input id="drive-item-confirm" className="input" value={confirmText} onChange={e => setConfirmText(e.target.value)} autoComplete="off" />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setTarget(null)} disabled={busy}>Back</Button>
+            <Button variant="danger" icon={Trash2} loading={busy} disabled={!ready} onClick={remove}>Remove</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
 
 function SetupItem({ done, children }) {
   return (
@@ -118,6 +186,7 @@ export default function Storage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(null);
   const [removing, setRemoving] = useState(null);
+  const [viewing, setViewing] = useState(null);
 
   async function run(id, action, success) {
     setBusy(id);
@@ -157,7 +226,11 @@ export default function Storage() {
                 </div>
                 <div className="mt-4"><QuotaBar usage={node.quotaUsage} limit={node.quotaLimit} /></div>
                 <dl className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                  <div><dt className="text-slate-500">Files stored</dt><dd className="font-medium text-slate-800">{node.fileCount}</dd></div>
+                  <div><dt className="text-slate-500">Files stored</dt><dd className="font-medium text-slate-800">
+                    {node.fileCount > 0
+                      ? <button type="button" onClick={() => setViewing(node)} className="text-brand-700 hover:underline">{node.fileCount} · View</button>
+                      : node.fileCount}
+                  </dd></div>
                   <div className="min-w-0">
                     <dt className="text-slate-500">Folder</dt>
                     <dd className="truncate font-medium text-slate-800">
@@ -183,10 +256,10 @@ export default function Storage() {
                     {node.enabled ? 'Pause' : 'Resume'}
                   </Button>
                   <Button size="sm" variant="ghost" icon={Trash2} aria-label="Remove Drive" aria-disabled={node.fileCount > 0}
-                    title={node.fileCount > 0 ? `Can’t remove: ${node.fileCount} ${node.fileCount === 1 ? 'item is' : 'items are'} stored on this Drive` : 'Remove this Drive'}
+                    title={node.fileCount > 0 ? `Can’t remove: ${node.fileCount} ${node.fileCount === 1 ? 'item is' : 'items are'} stored on this Drive. Click to see them.` : 'Remove this Drive'}
                     className={cx('ml-auto', node.fileCount > 0 ? 'cursor-not-allowed !text-slate-300 hover:!bg-transparent' : '!text-rose-600 hover:!bg-rose-50')}
                     onClick={() => (node.fileCount > 0
-                      ? toast(`“${node.name}” still holds ${node.fileCount} ${node.fileCount === 1 ? 'item' : 'items'}. Remove ${node.fileCount === 1 ? 'it' : 'them'} from the library first, or pause the Drive instead.`, 'error')
+                      ? setViewing(node)
                       : setRemoving(node))} />
                 </div>
               </div>
@@ -214,6 +287,7 @@ export default function Storage() {
         </>
       )}
 
+      {viewing && <DriveItems node={viewing} onClose={() => setViewing(null)} onChanged={reload} />}
       <Modal open={Boolean(removing)} onClose={() => setRemoving(null)} size="sm" title="Remove this Drive?"
         footer={(
           <>

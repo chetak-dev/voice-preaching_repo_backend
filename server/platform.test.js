@@ -387,6 +387,25 @@ test('drives can be registered before Google is configured and accept every file
   assert.equal((await admin(`/api/storage/${sharedNode.json.id}`, { method: 'DELETE' })).status, 200);
 });
 
+test('site admins can list and remove what a disconnected Drive holds, then remove the Drive', async () => {
+  const admin = await signIn('site_admin');
+  const orgAdmin = await signIn('org_admin');
+  const user = await signIn('user');
+  const node = (await admin('/api/storage', { method: 'POST', body: { name: 'Old test Drive', kind: 'oauth' } })).json;
+  const hidden = (await user('/api/content', { method: 'POST', body: { title: 'Hidden pending file', url: 'https://example.org/hidden' } })).json;
+  await app.locals.db.run('UPDATE content SET storage_node = ?, storage_key = ? WHERE id = ?', node.id, 'unreachable-file', hidden.id);
+
+  assert.equal((await orgAdmin(`/api/storage/${node.id}/items`)).status, 403);
+  const listed = await admin(`/api/storage/${node.id}/items`);
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.json.items.map(item => [item.title, item.status]), [['Hidden pending file', 'pending']]);
+  assert.equal((await admin(`/api/storage/${node.id}`, { method: 'DELETE' })).status, 409);
+
+  assert.equal((await admin(`/api/content/${hidden.id}`, { method: 'DELETE', body: REASON })).status, 200);
+  assert.deepEqual((await admin(`/api/storage/${node.id}/items`)).json.items, []);
+  assert.equal((await admin(`/api/storage/${node.id}`, { method: 'DELETE' })).status, 200);
+});
+
 test('Google failures become actionable messages', () => {
   const disabled = { response: { data: { error: { code: 403, message: 'Google Drive API has not been used in project 123 before or it is disabled.', errors: [{ reason: 'accessNotConfigured' }] } } } };
   assert.match(googleProblem(disabled, 'drive'), /Drive API is not enabled/);

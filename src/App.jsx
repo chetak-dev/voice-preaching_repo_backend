@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Bell, Bookmark, ChevronDown, ClipboardCheck, CloudDownload, CloudOff, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, MessageSquarePlus, Monitor,
-  Moon, PieChart, Plus, RefreshCw, Share, Sun, Trophy, UploadCloud, Users,
+  Moon, PieChart, Plus, RefreshCw, Share, Sun, Trophy, UploadCloud, Users, X,
 } from 'lucide-react';
 import { api } from './api.js';
 import { useNotifications } from './notifications.js';
@@ -174,12 +174,12 @@ function Shell({ user, config, onSignOut }) {
   const installState = useInstallState();
   const [iosHelp, setIosHelp] = useState(false);
   async function install() {
-    setSheetOpen(false);
+    closeSheet();
     if (installState === 'ios') { setIosHelp(true); return; }
     if (await promptInstall()) toast('Kalpa Taru is being installed.');
   }
   const canInstall = installState === 'prompt' || installState === 'ios';
-  const askSignOut = () => { setSheetOpen(false); setConfirmSignOut(true); };
+  const askSignOut = () => { closeSheet(); setConfirmSignOut(true); };
   const closeSignOut = useCallback(() => setConfirmSignOut(false), []);
   async function doSignOut() {
     setSigningOut(true);
@@ -193,7 +193,18 @@ function Shell({ user, config, onSignOut }) {
   const uploadJobs = useSyncExternalStore(subscribeUploads, getUploadJobs);
   const uploading = uploadJobs.filter(isUploadActive).length;
 
-  const navigate = useCallback(id => { window.location.hash = `/${id}`; setSheetOpen(false); window.scrollTo(0, 0); }, []);
+  const navigate = useCallback(id => {
+    // From the open menu, replace its history entry so Back does not return to it.
+    if (window.history.state?.ktSheet) window.location.replace(`#/${id}`);
+    else window.location.hash = `/${id}`;
+    setSheetOpen(false);
+    window.scrollTo(0, 0);
+  }, []);
+  // Every way of closing the menu (X, backdrop, Escape, Install, Sign out) drops the history entry it added.
+  const closeSheet = useCallback(() => {
+    if (window.history.state?.ktSheet) window.history.back();
+    else setSheetOpen(false);
+  }, []);
   useEffect(() => {
     const onHash = () => setView(currentHash());
     window.addEventListener('hashchange', onHash);
@@ -220,10 +231,19 @@ function Shell({ user, config, onSignOut }) {
 
   useEffect(() => {
     if (!sheetOpen) return undefined;
-    const onKey = event => event.key === 'Escape' && setSheetOpen(false);
+    // The phone's Back button closes the menu instead of leaving the page.
+    if (!window.history.state?.ktSheet) window.history.pushState({ ktSheet: true }, '');
+    const onPop = () => setSheetOpen(false);
+    const onKey = event => event.key === 'Escape' && closeSheet();
+    window.addEventListener('popstate', onPop);
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [sheetOpen]);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [sheetOpen, closeSheet]);
 
   const active = ITEMS[view] && allowed(view, user.role) ? view : 'library';
   const [addTarget, setAddTarget] = useState(null);
@@ -390,20 +410,25 @@ function Shell({ user, config, onSignOut }) {
 
       {/* Mobile "More" bottom sheet */}
       {sheetOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setSheetOpen(false)} />
-          <div className="pb-safe absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-3xl bg-white shadow-pop animate-sheet-up">
-            <div className="mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-slate-300" />
-            <div className="flex items-center gap-4 px-5 pb-4 pt-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center lg:hidden sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-label="Menu">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={closeSheet} />
+          <div className="pb-safe relative flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-pop animate-sheet-up sm:max-h-[90dvh] sm:max-w-lg sm:rounded-3xl sm:pb-0">
+            <div className="mx-auto mt-2.5 h-1.5 w-10 shrink-0 rounded-full bg-slate-300 sm:hidden" aria-hidden="true" />
+            <div className="flex shrink-0 items-center gap-4 border-b border-slate-100 px-5 pb-4 pt-3 sm:pt-5">
               <Avatar name={user.name} size="lg" />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-base font-semibold text-slate-900">{user.name}</p>
                 <p className="truncate text-sm text-slate-500">{user.email}</p>
                 <Badge tone={role.tone} className="mt-1.5">{role.label}</Badge>
               </div>
+              <button type="button" onClick={closeSheet} aria-label="Close menu"
+                className="flex h-10 w-10 shrink-0 items-center justify-center self-start rounded-full bg-slate-100 text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 active:scale-95">
+                <X className="h-5 w-5" />
+              </button>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {overflow.length > 0 && (
-              <div className="grid grid-cols-3 gap-2 border-t border-slate-100 px-4 py-4">
+              <div className="grid grid-cols-3 gap-2 px-4 py-4 sm:grid-cols-4">
                 {overflow.map(id => {
                   const item = ITEMS[id];
                   return (
@@ -427,6 +452,7 @@ function Shell({ user, config, onSignOut }) {
                 <a href="#/terms" className="font-medium text-slate-500 hover:text-brand-700">Terms & Conditions</a>·
                 <span>{VERSION_LABEL}</span>
               </p>
+            </div>
             </div>
           </div>
         </div>

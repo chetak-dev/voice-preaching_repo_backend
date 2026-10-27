@@ -2,6 +2,14 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.4
+
+- Storage: "Files stored" now opens a list of everything on that Drive, including items the library hides (pending, rejected, private and added files). Each can be removed, so a Drive can be emptied and then deleted.
+- Items on a disconnected Drive can now be removed (the record is removed; the file stays in that Drive).
+- Upload form simplified to title and description only; the tags panel and the storage destination dropdown are gone (uploads go to storage automatically).
+- Phone More menu: close button, Back button closes it, page behind no longer scrolls, and it shows as a centred panel on tablets and landscape screens.
+- Members page is responsive: cards on phones and tablets, the table on larger screens.
+
 ## 1.7.3
 
 - Storage: every Drive now shows a delete icon. It only works when no items are stored on that Drive; otherwise it is greyed out and explains why. Removing asks for confirmation in a dialog.

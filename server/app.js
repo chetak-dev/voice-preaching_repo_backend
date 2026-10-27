@@ -1080,6 +1080,11 @@ export function createApp(overrides = {}) {
 
     const removeStored = async (row, release) => {
       if (!row.storage_key) return;
+      if (row.storage_node !== 'local') {
+        // A disconnected Drive cannot be reached; the record is removed and the file stays in that Drive.
+        const node = await db.get('SELECT * FROM drives WHERE id = ?', row.storage_node);
+        if (node && !isConnected(node, config)) return;
+      }
       try {
         await storage.remove({ node: row.storage_node, key: row.storage_key });
       } catch (error) {
@@ -1234,6 +1239,16 @@ export function createApp(overrides = {}) {
     await db.run('UPDATE drives SET name = ?, enabled = ? WHERE id = ?', name, enabled, node.id);
     await audit(db, req.user.id, 'Updated storage destination', name);
     res.json({ ok: true });
+  }));
+  app.get('/api/storage/:id/items', siteAdmin, h(async (req, res) => {
+    const node = await drive(req.params.id);
+    const rows = await db.all(`SELECT c.id, c.title, c.status, c.visibility, c.size, c.created_at, c.parent_id, u.name AS uploader, p.title AS parent_title
+      FROM content c JOIN users u ON u.id = c.uploader_id LEFT JOIN content p ON p.id = c.parent_id
+      WHERE c.storage_node = ? ORDER BY c.created_at DESC LIMIT 200`, node.id);
+    res.json({ items: rows.map(row => ({
+      id: row.id, title: row.title, status: row.status, visibility: row.visibility, size: row.size, createdAt: row.created_at,
+      uploader: row.uploader, parentTitle: row.parent_title || null,
+    })) });
   }));
   app.delete('/api/storage/:id', siteAdmin, h(async (req, res) => {
     const node = await drive(req.params.id);

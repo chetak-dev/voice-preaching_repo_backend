@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, MessageSquarePlus, Plus, Tags, UploadCloud, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, MessageSquarePlus, Plus, UploadCloud, X } from 'lucide-react';
 import { api } from '../api.js';
 import { enqueue, forget } from '../uploads.js';
 import { makeThumbnail } from '../thumbnails.js';
 import { fingerprint } from '../textExtract.js';
-import { EMPTY_TAGS, TagFields, detectVerses, refreshFacets } from '../components/Tags.jsx';
+import { EMPTY_TAGS, detectVerses, refreshFacets } from '../components/Tags.jsx';
 import UploadTray from '../components/UploadTray.jsx';
 import { youtubeId } from '../components/Content.jsx';
 import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
@@ -110,20 +110,14 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   const [items, setItems] = useState([]);
   const [links, setLinks] = useState('');
   const [dragging, setDragging] = useState(false);
-  const [target, setTarget] = useState('auto');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(0);
   const [published, setPublished] = useState(false);
-  const [storage, setStorage] = useState(null);
   const [sameForAll, setSameForAll] = useState(false);
   const [shared, setShared] = useState({ title: '', description: '' });
   const [tags, setTags] = useState(() => ({ ...EMPTY_TAGS, language: request?.language || '' }));
-  const [showTags, setShowTags] = useState(false);
-  const isAdmin = user.role === 'site_admin';
   const useShared = sameForAll && items.length > 1;
-
-  useEffect(() => { if (isAdmin) api('/storage').then(setStorage).catch(() => {}); }, [isAdmin]);
 
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -212,7 +206,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       update(item.key, { status: 'ready', progress: 0, error: '' });
       return {
         key: item.key, kind: item.kind, file: item.file, url: item.url, title: fields.title, thumbnail: item.thumb,
-        fields: item.kind === 'file' && isAdmin ? { ...fields, targetDriveId: target } : fields,
+        fields,
         onUpdate: ({ status, progress, error: message }) => update(item.key, {
           status: status === 'queued' ? 'ready' : status, progress, error: status === 'error' ? message : '',
         }),
@@ -259,7 +253,6 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     );
   }
 
-  const destinations = storage ? [storage.local, ...storage.nodes].filter(node => node?.connected) : [];
   const remaining = items.filter(item => item.status !== 'done');
   const totalBytes = remaining.reduce((sum, item) => sum + (item.file?.size || 0), 0);
   const current = items.findIndex(item => item.status === 'uploading' || item.status === 'waiting');
@@ -380,34 +373,6 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
                     onCopyDescription={() => setItems(list => list.map(other => (other.status === 'done' ? other : { ...other, description: item.description })))} />
                 ))}
               </ul>
-            </div>
-          )}
-
-          {items.length > 0 && !parent && (
-            <div className="rounded-xl ring-1 ring-slate-200">
-              <button type="button" onClick={() => setShowTags(open => !open)} aria-expanded={showTags}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-slate-800">
-                <Tags className="h-4 w-4 text-brand-600" />
-                <span className="flex-1">Language, speaker, verses &amp; topics{items.length > 1 ? ' (for all items)' : ''}</span>
-                {!showTags && [tags.language, tags.speaker, tags.verses, tags.topics?.length].some(Boolean) && <span className="text-xs font-normal text-brand-700">Added</span>}
-                <ChevronDown className={cx('h-4 w-4 text-slate-400 transition', showTags && 'rotate-180')} />
-              </button>
-              {showTags && (
-                <div className="border-t border-slate-200 p-3">
-                  <TagFields value={tags} onChange={setTags} idPrefix="upload-tags" />
-                  <p className="mt-2 text-xs text-slate-500">Tags help people filter the library. Verses written in a title (like BG 2.13) are picked up automatically.</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {isAdmin && items.some(item => item.kind === 'file') && (
-            <div>
-              <label className="label" htmlFor="target">Storage destination</label>
-              <select id="target" className="input" value={target} disabled={busy} onChange={e => setTarget(e.target.value)}>
-                <option value="auto">Automatic</option>
-                {destinations.map(node => <option key={node.id} value={node.id}>{node.name}</option>)}
-              </select>
             </div>
           )}
 

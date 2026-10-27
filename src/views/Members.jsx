@@ -66,6 +66,40 @@ export default function Members({ user }) {
     }
   }
 
+  const statusBadge = member => (member.suspended
+    ? <Badge tone="bg-rose-50 text-rose-700 ring-rose-600/20" icon={Ban}>Suspended</Badge>
+    : <Badge tone="bg-emerald-50 text-emerald-700 ring-emerald-600/20" icon={UserCheck}>Active</Badge>);
+
+  const actions = member => (
+    <>
+      {canChangeRole(member) && !member.suspended && (
+        <Button variant="ghost" size="sm" icon={member.role === 'org_admin' ? ShieldMinus : ShieldPlus}
+          onClick={() => setPending({ member, action: 'role' })}>
+          {member.role === 'org_admin' ? 'Remove admin' : 'Make org admin'}
+        </Button>
+      )}
+      {canSuspend(member) && (
+        <Button variant="ghost" size="sm" icon={member.suspended ? RotateCcw : Ban}
+          className={member.suspended ? '' : '!text-rose-600 hover:bg-rose-50 hover:!text-rose-700'}
+          onClick={() => setPending({ member, action: 'suspend' })}>
+          {member.suspended ? 'Reactivate' : 'Suspend'}
+        </Button>
+      )}
+    </>
+  );
+
+  const identity = member => (
+    <div className="flex min-w-0 items-center gap-3">
+      <Avatar name={member.name} />
+      <div className="min-w-0">
+        <p className={cx('truncate font-medium', member.suspended ? 'text-slate-500' : 'text-slate-900')}>
+          {member.name}{member.id === user.id && <span className="ml-1.5 text-xs font-normal text-slate-400">(you)</span>}
+        </p>
+        <p className="truncate text-xs text-slate-500">{member.email}</p>
+      </div>
+    </div>
+  );
+
   const dialog = pending && (() => {
     const { member, action } = pending;
     if (action === 'role') {
@@ -87,25 +121,28 @@ export default function Members({ user }) {
 
       {data && (
         <>
-          <div className="mb-6 grid gap-4 sm:grid-cols-3">
+          <div className="mb-6 grid grid-cols-3 gap-2 sm:gap-4">
             {[
-              [Users, 'Total members', counts.all, 'bg-sky-50 text-sky-600'],
-              [ShieldCheck, 'Administrators', counts.admins, 'bg-brand-50 text-brand-600'],
-              [Ban, 'Suspended', counts.suspended, 'bg-rose-50 text-rose-600'],
-            ].map(([Icon, label, value, tone]) => (
-              <div key={label} className="card flex items-center gap-4 p-5">
-                <div className={cx('flex h-10 w-10 items-center justify-center rounded-lg', tone)}><Icon className="h-5 w-5" /></div>
-                <div><p className="text-2xl font-semibold text-slate-900">{value}</p><p className="text-sm text-slate-500">{label}</p></div>
+              [Users, 'Total members', 'Members', counts.all, 'bg-sky-50 text-sky-600'],
+              [ShieldCheck, 'Administrators', 'Admins', counts.admins, 'bg-brand-50 text-brand-600'],
+              [Ban, 'Suspended', 'Suspended', counts.suspended, 'bg-rose-50 text-rose-600'],
+            ].map(([Icon, label, short, value, tone]) => (
+              <div key={label} className="card flex flex-col items-start gap-2 p-3 sm:flex-row sm:items-center sm:gap-4 sm:p-5">
+                <div className={cx('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:h-10 sm:w-10', tone)}><Icon className="h-4 w-4 sm:h-5 sm:w-5" /></div>
+                <div className="min-w-0">
+                  <p className="text-xl font-semibold text-slate-900 sm:text-2xl">{value}</p>
+                  <p className="truncate text-xs text-slate-500 sm:text-sm"><span className="sm:hidden">{short}</span><span className="hidden sm:inline">{label}</span></p>
+                </div>
               </div>
             ))}
           </div>
 
           <section className="card overflow-hidden">
-            <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1 lg:self-start">
+            <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 sm:flex lg:self-start">
                 {FILTERS.map(([id, label]) => (
                   <button key={id} type="button" onClick={() => setFilter(id)}
-                    className={cx('rounded-md px-3 py-1.5 text-sm font-medium transition',
+                    className={cx('whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition',
                       filter === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900')}>
                     {label} <span className="ml-1 text-xs text-slate-400">{counts[id]}</span>
                   </button>
@@ -118,70 +155,59 @@ export default function Members({ user }) {
             </div>
 
             {!members.length ? <div className="p-6"><EmptyState icon={Users} title="No members found" /></div> : (
-              <div className="overflow-x-auto">
+              <>
+              <ul className="divide-y divide-slate-100 lg:hidden">
+                {members.map(member => (
+                  <li key={member.id} className={cx('px-4 py-3', member.suspended && 'bg-slate-50/40')}>
+                    {identity(member)}
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-12">
+                      <Badge tone={ROLE_META[member.role].tone}>{ROLE_META[member.role].label}</Badge>
+                      {statusBadge(member)}
+                      <span className="text-xs text-slate-500">{member.uploads} {member.uploads === 1 ? 'upload' : 'uploads'} · Joined {timeAgo(member.createdAt)}</span>
+                    </div>
+                    {(canChangeRole(member) || canSuspend(member)) && (
+                      <div className="mt-2 flex flex-wrap gap-1 pl-10">{actions(member)}</div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="hidden overflow-x-auto lg:block">
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-5 py-3">Member</th>
                       <th className="px-5 py-3">Role</th>
                       <th className="px-5 py-3">Status</th>
-                      <th className="hidden px-5 py-3 md:table-cell">Sign-in</th>
-                      <th className="hidden px-5 py-3 md:table-cell">Uploads</th>
-                      <th className="hidden px-5 py-3 lg:table-cell">Joined</th>
+                      <th className="hidden px-5 py-3 xl:table-cell">Sign-in</th>
+                      <th className="px-5 py-3">Uploads</th>
+                      <th className="hidden px-5 py-3 xl:table-cell">Joined</th>
                       <th className="px-5 py-3"><span className="sr-only">Actions</span></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {members.map(member => (
                       <tr key={member.id} className={cx('hover:bg-slate-50/60', member.suspended && 'bg-slate-50/40')}>
-                        <td className="px-5 py-3">
-                          <div className="flex items-center gap-3">
-                            <Avatar name={member.name} />
-                            <div className="min-w-0">
-                              <p className={cx('truncate font-medium', member.suspended ? 'text-slate-500' : 'text-slate-900')}>
-                                {member.name}{member.id === user.id && <span className="ml-1.5 text-xs font-normal text-slate-400">(you)</span>}
-                              </p>
-                              <p className="truncate text-xs text-slate-500">{member.email}</p>
-                            </div>
-                          </div>
-                        </td>
+                        <td className="max-w-[16rem] px-5 py-3">{identity(member)}</td>
                         <td className="px-5 py-3"><Badge tone={ROLE_META[member.role].tone}>{ROLE_META[member.role].label}</Badge></td>
-                        <td className="px-5 py-3">
-                          {member.suspended
-                            ? <Badge tone="bg-rose-50 text-rose-700 ring-rose-600/20" icon={Ban}>Suspended</Badge>
-                            : <Badge tone="bg-emerald-50 text-emerald-700 ring-emerald-600/20" icon={UserCheck}>Active</Badge>}
-                        </td>
-                        <td className="hidden px-5 py-3 md:table-cell">
+                        <td className="px-5 py-3">{statusBadge(member)}</td>
+                        <td className="hidden px-5 py-3 xl:table-cell">
                           <div className="flex items-center gap-1.5 text-xs text-slate-600">
                             {member.google && <span className="inline-flex items-center gap-1"><GoogleDot /> Google</span>}
                             {member.google && member.password && <span className="text-slate-300">·</span>}
                             {member.password && <span className="inline-flex items-center gap-1"><KeyRound className="h-3.5 w-3.5 text-slate-400" /> Email</span>}
                           </div>
                         </td>
-                        <td className="hidden px-5 py-3 text-slate-600 md:table-cell">{member.uploads}</td>
-                        <td className="hidden px-5 py-3 text-slate-500 lg:table-cell">{timeAgo(member.createdAt)}</td>
+                        <td className="px-5 py-3 text-slate-600">{member.uploads}</td>
+                        <td className="hidden px-5 py-3 text-slate-500 xl:table-cell">{timeAgo(member.createdAt)}</td>
                         <td className="whitespace-nowrap px-5 py-3 text-right">
-                          <div className="flex justify-end gap-1">
-                            {canChangeRole(member) && !member.suspended && (
-                              <Button variant="ghost" size="sm" icon={member.role === 'org_admin' ? ShieldMinus : ShieldPlus}
-                                onClick={() => setPending({ member, action: 'role' })}>
-                                {member.role === 'org_admin' ? 'Remove admin' : 'Make org admin'}
-                              </Button>
-                            )}
-                            {canSuspend(member) && (
-                              <Button variant="ghost" size="sm" icon={member.suspended ? RotateCcw : Ban}
-                                className={member.suspended ? '' : 'text-rose-600 hover:bg-rose-50 hover:text-rose-700'}
-                                onClick={() => setPending({ member, action: 'suspend' })}>
-                                {member.suspended ? 'Reactivate' : 'Suspend'}
-                              </Button>
-                            )}
-                          </div>
+                          <div className="flex justify-end gap-1">{actions(member)}</div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </section>
         </>
