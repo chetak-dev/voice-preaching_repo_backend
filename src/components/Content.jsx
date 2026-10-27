@@ -4,6 +4,8 @@ import { api, fileUrl, thumbnailUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
 import FullPreview from './FullPreview.jsx';
 import { Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
+import { TagChips, TagFields, refreshFacets, tagsOf } from './Tags.jsx';
+import DownloadButton from './DownloadButton.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
 
@@ -114,6 +116,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
         {item.parent_title && <p className="mb-0.5 truncate text-[11px] font-medium text-brand-700">Added to: {item.parent_title}</p>}
         <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
         {item.description && <p className="mt-0.5 hidden text-xs text-slate-500 sm:line-clamp-1">{item.description}</p>}
+        {item.snippet && <p className="mt-1 line-clamp-2 text-[11px] italic leading-snug text-slate-500" title="Found inside the document">{item.snippet}</p>}
         {showStatus && (
           <div className="mt-2"><Badge tone={STATUS_META[item.status].tone} className="px-1.5 py-0.5 text-[10px]">{STATUS_META[item.status].label}</Badge></div>
         )}
@@ -205,20 +208,22 @@ const MIME_INLINE = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'applica
 export function EditContentModal({ item, onClose, onSaved }) {
   const [title, setTitle] = useState(item?.title || '');
   const [description, setDescription] = useState(item?.description || '');
+  const [tags, setTags] = useState(() => tagsOf(item));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { setTitle(item?.title || ''); setDescription(item?.description || ''); setError(''); }, [item?.id]);
+  useEffect(() => { setTitle(item?.title || ''); setDescription(item?.description || ''); setTags(tagsOf(item)); setError(''); }, [item?.id]);
   async function submit(event) {
     event.preventDefault();
     if (!title.trim() || busy) return;
     setBusy(true); setError('');
     try {
-      const saved = await api(`/content/${item.id}`, { method: 'PATCH', body: { title: title.trim(), description: description.trim() } });
-      onSaved({ title: saved.title, description: saved.description });
+      const saved = await api(`/content/${item.id}`, { method: 'PATCH', body: { title: title.trim(), description: description.trim(), ...tags } });
+      refreshFacets();
+      onSaved({ title: saved.title, description: saved.description, language: saved.language, speaker: saved.speaker, verses: saved.verses, topics: saved.topics });
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   return (
-    <Modal open={Boolean(item)} onClose={busy ? () => {} : onClose} size="sm" title="Edit details"
+    <Modal open={Boolean(item)} onClose={busy ? () => {} : onClose} size="md" title="Edit details"
       footer={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -234,13 +239,14 @@ export function EditContentModal({ item, onClose, onSaved }) {
           <span className="label">Description</span>
           <textarea className="input min-h-[96px]" value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} placeholder="Optional" />
         </label>
+        <TagFields value={tags} onChange={setTags} idPrefix="edit-tags" />
         {error && <p className="text-sm text-rose-600">{error}</p>}
       </form>
     </Modal>
   );
 }
 
-export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, onEdited }) {
+export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, onEdited, onPickTag }) {
   const { openPlayer } = useMediaPlayer();
   const [editing, setEditing] = useState(null);
   if (!item) return null;
@@ -255,6 +261,7 @@ export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, o
       <>
         {onShare && canShare(item) && <Button variant="secondary" icon={Share2} onClick={() => onShare(item)}>Share</Button>}
         {isMedia && <Button variant="secondary" icon={Play} onClick={() => { openPlayer(item); onClose(); }}>Keep playing while browsing</Button>}
+        {isMedia && <DownloadButton item={item} />}
         {canEdit && <Button variant="secondary" icon={Pencil} onClick={() => setEditing(item)}>Edit</Button>}
         {actions}
         {item.type === 'link' ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
@@ -270,6 +277,7 @@ export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, o
         {item.status === 'approved' && <div><dt className="text-slate-500">Views</dt><dd className="font-medium text-slate-900"><ViewCount value={item.views} /></dd></div>}
       </dl>
       {item.description && <p className="mt-4 whitespace-pre-line text-sm text-slate-600">{item.description}</p>}
+      <TagChips item={item} onPick={onPickTag ? (key, value) => { onClose(); onPickTag(key, value); } : undefined} className="mt-4" />
       {item.parent_title && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900">Added to the upload <span className="font-semibold">“{item.parent_title}”</span></p>}
       {!item.parent_id && item.status !== 'rejected' && <UploadParts item={item} user={user} onAddTo={onAddTo} />}
 

@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, Circle, HardDrive, Pause, Play, Plug, Plus, RefreshCw, Server, Trash2,
+  AlertTriangle, CheckCircle2, Circle, DatabaseBackup, HardDrive, Pause, Play, Plug, Plus, RefreshCw, Server, Trash2,
 } from 'lucide-react';
 import { api } from '../api.js';
-import { Badge, Button, ErrorBanner, Modal, PageHeader, Spinner, cx, formatBytes, useAsync, useToast } from '../components/ui.jsx';
+import { Badge, Button, ErrorBanner, Modal, PageHeader, Spinner, cx, formatBytes, timeAgo, useAsync, useToast } from '../components/ui.jsx';
 
 const folderIdFrom = value => value.trim().match(/folders\/([A-Za-z0-9_-]+)/)?.[1] || value.trim();
 const EMPTY_FORM = { name: '', folderId: '', kind: 'oauth' };
@@ -59,6 +59,55 @@ function QuotaBar({ usage, limit }) {
       </div>
       {percent >= 90 && <p className="mt-1.5 text-xs font-medium text-rose-600">Nearly full. New uploads will go to other Drives; connect another Drive soon.</p>}
     </div>
+  );
+}
+
+function BackupCard() {
+  const toast = useToast();
+  const { data, error, reload } = useAsync(() => api('/backups'), []);
+  const [running, setRunning] = useState(false);
+  const last = data?.last;
+
+  async function backUp() {
+    setRunning(true);
+    try {
+      const record = await api('/backups', { method: 'POST' });
+      toast(`Database backed up (${formatBytes(record.size)}).`);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setRunning(false);
+      reload();
+    }
+  }
+
+  return (
+    <section className="card mt-6 flex flex-col gap-4 p-5 sm:flex-row sm:items-center">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><DatabaseBackup className="h-5 w-5" /></div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-slate-900">Database backup</h3>
+            {last && (last.ok
+              ? <Badge tone="bg-emerald-50 text-emerald-700 ring-emerald-600/20" icon={CheckCircle2}>OK</Badge>
+              : <Badge tone="bg-rose-50 text-rose-700 ring-rose-600/20" icon={AlertTriangle}>Failed</Badge>)}
+          </div>
+          {error ? <p className="text-xs text-rose-600">{error.message}</p>
+            : !data ? <p className="text-xs text-slate-500">Loading…</p>
+              : !last ? <p className="text-xs text-slate-500">No backups yet.</p>
+                : (
+                  <p className="text-xs text-slate-500" title={new Date(last.createdAt).toLocaleString()}>
+                    Last backup {timeAgo(last.createdAt)}
+                    {last.ok ? ` · ${formatBytes(last.size)} · ${last.location}` : ` · ${last.error}`}
+                  </p>
+                )}
+          {data && !data.scheduled && (
+            <p className="mt-1 text-xs text-amber-700">Set CRON_SECRET in Vercel to back up automatically every night.</p>
+          )}
+        </div>
+      </div>
+      <Button size="sm" variant="secondary" icon={DatabaseBackup} loading={running} onClick={backUp} className="shrink-0">Back up now</Button>
+    </section>
   );
 }
 
@@ -158,6 +207,7 @@ export default function Storage() {
               <Plus className="mb-2 h-6 w-6" /> Add Google Drive
             </button>
           </div>
+          <BackupCard />
         </>
       )}
 

@@ -1,4 +1,5 @@
 ﻿import { fileUrl, saveThumbnail } from './api.js';
+import { saveText } from './textExtract.js';
 
 // Builds a small JPEG preview for any file in the browser: a frame for videos, the first page for PDFs,
 // embedded cover art for audio, the stored or rendered first page for Office files, and the text for text files.
@@ -228,8 +229,11 @@ async function drainQueue() {
         const response = await fetch(fileUrl(id, true), { credentials: 'same-origin' });
         if (!response.ok) continue;
         const file = new File([await response.blob()], item.original_name || item.title, { type: item.mime || '' });
-        const thumb = await makeThumbnail(file);
-        if (thumb) { await saveThumbnail(id, thumb); onSaved?.(id); }
+        if (!item.has_thumb) {
+          const thumb = await makeThumbnail(file);
+          if (thumb) { await saveThumbnail(id, thumb); onSaved?.(id); }
+        }
+        if (item.type === 'doc' && !item.has_text) await saveText(id, file).catch(() => {});
       } catch { /* try the next one */ }
     }
   } finally {
@@ -238,13 +242,14 @@ async function drainQueue() {
 }
 
 /**
- * Creates missing thumbnails for existing items, one at a time, while the list is open.
+ * Creates missing thumbnails (and search text for documents) for existing items, one at a time, while the list is open.
  * Only runs for items the server lets this user update. Returns a cancel function.
  */
 export function backfillThumbnails(items, onSaved) {
   const added = [];
   for (const item of items) {
-    if (item.has_thumb || item.type === 'link' || !item.size || item.size > BACKFILL_LIMIT) continue;
+    const needsText = item.type === 'doc' && !item.has_text;
+    if ((item.has_thumb && !needsText) || item.type === 'link' || !item.size || item.size > BACKFILL_LIMIT) continue;
     if (tried.has(item.id) || queue.has(item.id)) continue;
     queue.set(item.id, { item, onSaved });
     added.push(item.id);

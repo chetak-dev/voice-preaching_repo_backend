@@ -2,6 +2,20 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.0
+
+- Tags: language, speaker, Gita verses and topics on uploads and in **Edit**; verses in titles are detected automatically.
+- Library filters (language, chapter, speaker, topic), clickable tags, and paging (24 at a time with infinite scroll).
+- Search inside PDFs, Office and text documents, with matching snippets.
+- Duplicate warnings for files and links already in the library.
+- Content requests with upvotes, "Upload for this", and automatic fulfilment on approval.
+- In-app notifications with a bell and unread badge.
+- Offline downloads for audio and video, and an offline Downloads screen.
+- Dark mode (Light / Dark / System).
+- Admin analytics on the Overview page.
+- Automatic nightly database backups to Google Drive (set `CRON_SECRET`), **Back up now** on Storage, and `npm run restore-backup`.
+- More compact desktop sidebar.
+
 ## 1.6.0
 
 - Library sorting (Newest, Most viewed, A–Z, Oldest), remembered per device.

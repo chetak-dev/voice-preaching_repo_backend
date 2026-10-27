@@ -5,6 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Kalpa Taru - Gita preaching content, shared and reviewed by ISKCON Brahmapur." />
     <meta name="theme-color" content="#4f46e5" />
+    <script>
+      (function () {
+        try {
+          var p = localStorage.getItem('kt.theme');
+          var d = p === 'dark' || (p !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var r = document.documentElement;
+          r.classList.toggle('dark', !!d);
+          r.style.colorScheme = d ? 'dark' : 'light';
+          if (d) document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0f172a');
+        } catch (e) {}
+      })();
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

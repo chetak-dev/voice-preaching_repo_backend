@@ -19,6 +19,14 @@ A professional content-sharing platform for communities. Members contribute **im
 - **Editing and withdrawing** — site and org admins can fix an item's title and description from its preview (**Edit**). Contributors can **Withdraw** their own submission while it is still pending. Reviewers can approve or reject many pending items at once; a bulk rejection uses one shared note.
 - **Media player** — audio and video keep playing while you browse, with ±15 second skip, playback speed, a minimised mode and lock-screen / headphone controls on phones.
 - **Share links** — **Share** copies a `/s/<id>` link. Apps like WhatsApp show the item's title, description and thumbnail as a preview, then open it in the app. Only approved, public items reveal any details; anything else shows a generic Kalpa Taru preview.
+- **Tags and filters** — items can have a language, speaker, Gita verses (e.g. `2.13, 3.19-21`; verses in a title are detected automatically) and topics. The library filters by language, chapter, speaker and topic, and tapping a tag in a preview filters by it. The library loads 24 items at a time as you scroll.
+- **Search inside documents** — the browser extracts the text of PDFs (first 60 pages), Word/PowerPoint/Excel and text files when they are uploaded (older documents are processed when an admin or the uploader opens the library). Search matches that text and shows the matching snippet. Scanned PDFs without a text layer can only be found by title and tags.
+- **Duplicate warnings** — the upload page warns when a file (matched by size and content hash) or link is already in the library or waiting for review. You can still upload it.
+- **Requests** — anyone can ask for content they could not find; others upvote it. **Upload for this** links an upload to the request, which is marked fulfilled (and its requester and voters notified) once that upload is approved.
+- **Notifications** — in-app alerts when your contribution is approved, rejected or removed, when your request is fulfilled or closed, and when your role changes. Reviewers also see how many items are waiting. The bell refreshes every minute and whenever the app is reopened.
+- **Offline listening** — audio and video can be downloaded to the device (**Downloads**) and played without internet. Downloads are per device and browser. When the app opens offline it shows your downloads.
+- **Dark mode** — Light, Dark or System (follows the device), next to the logo on desktop and in the **More** menu on phones.
+- **Analytics** (admins) — the Overview shows views in the last 30 days, uploads per week, most viewed items, top contributors, languages, topics and open requests.
 - **Install as an app** — Kalpa Taru is a PWA. Use **Install app** in the sidebar (or the **More** menu on phones); on iPhone it shows the Share → *Add to Home Screen* steps.
 - Sign up / sign in with email + password or Google (one sign-in page for every role), scrypt-hashed passwords, file signature verification, rate limiting, CSRF origin checks, encrypted refresh tokens, audit log.
 
@@ -154,6 +162,14 @@ Every `git push` to `main` redeploys automatically. Sign-in only works on the `A
 6. In Google Cloud Console add `https://your-domain.com` as an authorized JavaScript origin and `https://your-domain.com/api/auth/google/callback` as a redirect URI.
 
 To update later: `git pull && npm ci && npm run build && sudo systemctl restart voice`.
+
+## Database backups
+
+Every night at 03:00 IST, Vercel Cron calls `/api/cron/backup`, which exports the database (users, Drives, content, bookmarks, views, audit log and other app tables) as gzipped JSON to a **Backups** folder inside the app folder of the first active, connected Google Drive. The newest 14 backups are kept. Drive refresh tokens are never included. Without a connected Drive, a self-hosted server writes backups to `data/backups/` instead.
+
+- To turn on nightly backups, set a long random `CRON_SECRET` in Vercel (Project → Settings → Environment Variables) and redeploy. Vercel sends it automatically. Without it, the endpoint refuses every request.
+- Site admins can also click **Back up now** on the **Storage** page, which shows when the last backup ran and whether it worked.
+- To restore, download a backup file and run `npm run restore-backup -- kalpa-taru-backup-….json.gz`. This only lists the row counts. To write the rows into the database set in `.env` (`TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, or `DATA_DIR`), add `--yes`. Rows that already exist are overwritten and other rows are kept. Afterwards, reconnect any Drive that shows "Needs connection".
 
 ## Tests
 

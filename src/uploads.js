@@ -1,5 +1,6 @@
 import { api, saveThumbnail, sendUpload, startUpload } from './api.js';
 import { makeThumbnail } from './thumbnails.js';
+import { saveText } from './textExtract.js';
 
 // Uploads run here, outside any page, so they continue while the user moves around the app. Files waiting to finish
 // are also kept in IndexedDB: if the tab is closed (or the phone suspends it), they resume next time the app opens.
@@ -83,6 +84,8 @@ function attachThumbnail(job, contentId) {
   Promise.resolve(job.thumbnail || makeThumbnail(job.file))
     .then(blob => blob && saveThumbnail(contentId, blob))
     .then(() => thumbnailListeners.forEach(listener => listener(contentId)))
+    .catch(() => {})
+    .then(() => saveText(contentId, job.file))
     .catch(() => {});
 }
 

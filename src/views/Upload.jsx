@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, Plus, UploadCloud, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, MessageSquarePlus, Plus, Tags, UploadCloud, X } from 'lucide-react';
 import { api } from '../api.js';
 import { enqueue, forget } from '../uploads.js';
 import { makeThumbnail } from '../thumbnails.js';
+import { fingerprint } from '../textExtract.js';
+import { EMPTY_TAGS, TagFields, detectVerses, refreshFacets } from '../components/Tags.jsx';
 import UploadTray from '../components/UploadTray.jsx';
 import { youtubeId } from '../components/Content.jsx';
 import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
@@ -32,6 +34,9 @@ let nextKey = 0;
 // Thumbnails are made one file at a time so a large batch of videos doesn't overwhelm the device.
 let thumbChain = Promise.resolve();
 const queueThumbnail = file => { const next = thumbChain.then(() => makeThumbnail(file)); thumbChain = next.catch(() => {}); return next; };
+let printChain = Promise.resolve();
+const queueFingerprint = file => { const next = printChain.then(() => fingerprint(file)); printChain = next.catch(() => {}); return next; };
+const STATUS_WORD = { approved: 'in the library', pending: 'waiting for review' };
 
 function QueueThumb({ item, compact }) {
   const Icon = TYPE_META[item.type].icon;
@@ -79,6 +84,12 @@ function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, 
               <span className="w-9 text-right text-xs tabular-nums text-slate-500">{item.progress}%</span>
             </div>
           )}
+          {item.duplicate && item.status !== 'done' && (
+            <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span>Already {STATUS_WORD[item.duplicate.status] || 'uploaded'} as ?{item.duplicate.title}?. Remove it unless this is a different version.</span>
+            </p>
+          )}
           {item.status === 'waiting' && <p className="flex items-center gap-1.5 text-xs text-amber-700"><CloudOff className="h-3.5 w-3.5 shrink-0" />Waiting for connection… it will continue automatically.</p>}
           {item.status === 'error' && <p className="flex items-center gap-1.5 text-xs text-rose-700"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{item.error}</p>}
         </div>
@@ -92,7 +103,7 @@ function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, 
   );
 }
 
-export default function Upload({ user, navigate, onChanged, parent, onClearParent }) {
+export default function Upload({ user, navigate, onChanged, parent, onClearParent, request, onClearRequest }) {
   const toast = useToast();
   const inputRef = useRef(null);
   const [mode, setMode] = useState('file');
@@ -107,6 +118,8 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   const [storage, setStorage] = useState(null);
   const [sameForAll, setSameForAll] = useState(false);
   const [shared, setShared] = useState({ title: '', description: '' });
+  const [tags, setTags] = useState(() => ({ ...EMPTY_TAGS, language: request?.language || '' }));
+  const [showTags, setShowTags] = useState(false);
   const isAdmin = user.role === 'site_admin';
   const useShared = sameForAll && items.length > 1;
 
@@ -131,6 +144,10 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       key: ++nextKey, kind: 'file', file, type: fileTypeOf(file), title: titleFromName(file.name), description: '', status: 'ready', progress: 0,
     }));
     setItems(list => [...list, ...added]);
+    Promise.all(added.map(item => queueFingerprint(item.file).then(print => {
+      if (print && mounted.current) update(item.key, { fingerprint: print });
+      return print;
+    }, () => null))).then(prints => checkDuplicates({ fingerprints: prints.filter(Boolean) }, added.map((item, index) => ({ key: item.key, fingerprint: prints[index] }))));
     for (const item of added) {
       queueThumbnail(item.file).then(thumb => {
         if (!thumb || !mounted.current) return;
@@ -139,6 +156,19 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
         update(item.key, { thumb, thumbUrl });
       });
     }
+  }
+
+  // Warns about files and links that the library already has; uploading them anyway is still allowed.
+  async function checkDuplicates(body, keys) {
+    if (!body.fingerprints?.length && !body.urls?.length) return;
+    try {
+      const { matches } = await api('/uploads/check', { method: 'POST', body });
+      if (!mounted.current) return;
+      for (const { key, fingerprint: print, url } of keys) {
+        const match = matches.find(entry => (print && entry.fingerprint === print) || (url && entry.url === url));
+        if (match) update(key, { duplicate: match });
+      }
+    } catch { /* the check is only a hint */ }
   }
 
   function addLinks() {
@@ -150,12 +180,14 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     if (!urls.length) return;
     if (invalid) { setError(`"${invalid}" is not a valid link.`); return; }
     setError('');
-    setItems(list => [...list, ...urls.map(url => {
+    const added = urls.map(url => {
       const yt = youtubeId(url);
       return { key: ++nextKey, kind: 'link', url, type: 'link', title: parent?.title || '', description: '', status: 'ready', progress: 0,
         thumbUrl: yt ? `https://img.youtube.com/vi/${encodeURIComponent(yt)}/hqdefault.jpg` : undefined };
-    })]);
+    });
+    setItems(list => [...list, ...added]);
     setLinks('');
+    checkDuplicates({ urls }, added.map(item => ({ key: item.key, url: item.url })));
   }
 
   async function submit(event) {
@@ -165,9 +197,18 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     if (useShared ? !shared.title.trim() : pending.some(item => !item.title.trim())) { setError(useShared ? 'Enter a title.' : 'Every item needs a title.'); return; }
     setBusy(true);
     setError('');
+    let requestId = request?.id;
     const results = await enqueue(pending.map(item => {
       const source = useShared ? shared : item;
-      const fields = { title: source.title.trim(), description: source.description.trim(), ...(parent ? { parentId: parent.id } : {}) };
+      const title = source.title.trim();
+      const fields = {
+        title, description: source.description.trim(), ...(parent ? { parentId: parent.id } : {}),
+        language: tags.language, speaker: tags.speaker.trim(), topics: tags.topics, verses: tags.verses.trim() || detectVerses(title),
+        ...(item.fingerprint ? { fingerprint: item.fingerprint } : {}),
+        // Only one upload answers the request; it is marked fulfilled when that upload is approved.
+        ...(requestId && !parent ? { requestId } : {}),
+      };
+      requestId = null;
       update(item.key, { status: 'ready', progress: 0, error: '' });
       return {
         key: item.key, kind: item.kind, file: item.file, url: item.url, title: fields.title, thumbnail: item.thumb,
@@ -182,7 +223,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     if (!mounted.current) return;
     forget(results.map(result => result.id));
     setBusy(false);
-    if (ok) onChanged?.();
+    if (ok) { onChanged?.(); refreshFacets(); }
     setPublished(results.some(result => result.contentStatus === 'approved'));
     if (failed) {
       setError(`${plural(failed, 'item')} could not be submitted. Fix and submit again.`);
@@ -193,7 +234,8 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   }
 
   function reset() {
-    setSubmitted(0); setItems([]); setLinks(''); setError(''); setMode('file'); setSameForAll(false); setShared({ title: '', description: '' });
+    setSubmitted(0); setItems([]); setLinks(''); setError(''); setMode('file'); setSameForAll(false); setShared({ title: '', description: '' }); setTags(EMPTY_TAGS);
+    if (request) onClearRequest?.();
   }
 
   if (submitted) {
@@ -235,6 +277,17 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
             <p className="truncate text-sm font-semibold text-slate-900">{parent.title}</p>
           </div>
           {!busy && <button type="button" onClick={onClearParent} className="shrink-0 text-xs font-medium text-slate-500 hover:text-slate-800">New upload instead</button>}
+        </div>
+      )}
+
+      {request && !parent && (
+        <div className="mb-4 flex items-center gap-3 rounded-xl bg-white p-3 ring-1 ring-brand-200">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><MessageSquarePlus className="h-4 w-4" /></div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-slate-500">Uploading for the request</p>
+            <p className="truncate text-sm font-semibold text-slate-900">{request.title}</p>
+          </div>
+          {!busy && <button type="button" onClick={onClearRequest} className="shrink-0 text-xs font-medium text-slate-500 hover:text-slate-800">Not for this request</button>}
         </div>
       )}
 
@@ -327,6 +380,24 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
                     onCopyDescription={() => setItems(list => list.map(other => (other.status === 'done' ? other : { ...other, description: item.description })))} />
                 ))}
               </ul>
+            </div>
+          )}
+
+          {items.length > 0 && !parent && (
+            <div className="rounded-xl ring-1 ring-slate-200">
+              <button type="button" onClick={() => setShowTags(open => !open)} aria-expanded={showTags}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-slate-800">
+                <Tags className="h-4 w-4 text-brand-600" />
+                <span className="flex-1">Language, speaker, verses &amp; topics{items.length > 1 ? ' (for all items)' : ''}</span>
+                {!showTags && [tags.language, tags.speaker, tags.verses, tags.topics?.length].some(Boolean) && <span className="text-xs font-normal text-brand-700">Added</span>}
+                <ChevronDown className={cx('h-4 w-4 text-slate-400 transition', showTags && 'rotate-180')} />
+              </button>
+              {showTags && (
+                <div className="border-t border-slate-200 p-3">
+                  <TagFields value={tags} onChange={setTags} idPrefix="upload-tags" />
+                  <p className="mt-2 text-xs text-slate-500">Tags help people filter the library. Verses written in a title (like BG 2.13) are picked up automatically.</p>
+                </div>
+              )}
             </div>
           )}
 

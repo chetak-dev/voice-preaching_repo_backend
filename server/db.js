@@ -76,6 +76,27 @@ const SCHEMA = `
     content_id TEXT PRIMARY KEY REFERENCES content(id), mime TEXT NOT NULL,
     data BLOB NOT NULL, created_at TEXT NOT NULL
   );
+  -- Text read from documents in the uploader's browser, used only for search.
+  CREATE TABLE IF NOT EXISTS content_text (
+    content_id TEXT PRIMARY KEY REFERENCES content(id), body TEXT NOT NULL, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+    content_id TEXT, link TEXT, read_at TEXT, created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, created_at);
+  CREATE TABLE IF NOT EXISTS content_requests (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL, details TEXT NOT NULL DEFAULT '', language TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','fulfilled','closed')),
+    content_id TEXT, fulfilled_by TEXT REFERENCES users(id),
+    created_at TEXT NOT NULL, closed_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS request_votes (
+    request_id TEXT NOT NULL REFERENCES content_requests(id), user_id TEXT NOT NULL REFERENCES users(id),
+    PRIMARY KEY(request_id, user_id)
+  );
 `;
 
 /**
@@ -133,13 +154,28 @@ export function openDatabase({ url, authToken, directory }) {
       ['visibility', "TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public','private'))"],
       // Set when this file or link was added to an existing upload.
       ['parent_id', 'TEXT REFERENCES content(id)'],
+      // Tags: language, speaker, Gita references ("2.13,3" = verse 2.13 and all of chapter 3) and comma-separated topics.
+      ['language', 'TEXT'],
+      ['speaker', 'TEXT'],
+      ['verses', 'TEXT'],
+      ['topics', 'TEXT'],
+      // Size plus hashes of the start and end of the file, used to spot duplicate uploads.
+      ['fingerprint', 'TEXT'],
+      ['request_id', 'TEXT'],
     ]);
     await client.execute('CREATE INDEX IF NOT EXISTS content_parent ON content(parent_id, created_at)');
+    await client.execute('CREATE INDEX IF NOT EXISTS content_fingerprint ON content(fingerprint)');
     await addColumns('uploads', [
       ['chunk_lock', 'TEXT'],
       ['chunk_lock_expires', 'INTEGER'],
       ['completed_key', 'TEXT'],
       ['parent_id', 'TEXT'],
+      ['language', 'TEXT'],
+      ['speaker', 'TEXT'],
+      ['verses', 'TEXT'],
+      ['topics', 'TEXT'],
+      ['fingerprint', 'TEXT'],
+      ['request_id', 'TEXT'],
     ]);
   })();
   return db;

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { google } from 'googleapis';
 import { openDatabase, audit, hashPassword, verifyPassword } from './db.js';
+import { createBackup, cronAuthorized, listBackups } from './backup.js';
 import { CHUNK_SIZE, DRIVE_FILE_SCOPE, createStorage, driveClient, encryptToken, ensureAppFolder, isConnected, oauthClient, refreshQuota } from './storage.js';
 
 const TYPES = ['image', 'video', 'audio', 'doc', 'link'];
@@ -43,6 +44,57 @@ const publicUser = row => ({
   suspended: Boolean(row.suspended), google: Boolean(row.google_linked), password: Boolean(row.password_hash),
   createdAt: row.created_at,
 });
+
+export const LANGUAGES = ['English', 'Hindi', 'Odia', 'Bengali', 'Sanskrit', 'Telugu', 'Other'];
+// Verses in the Bhagavad Gita per chapter, used to reject impossible references.
+const GITA_VERSES = [47, 72, 43, 42, 29, 47, 30, 28, 34, 42, 55, 20, 35, 27, 20, 24, 28, 78];
+// Turns "BG 2.13, 3:19-21, ch 4" into "2.13,3.19,3.20,3.21,4". A bare number is a whole chapter.
+export function normalizeVerses(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || value.length > 300) throw fail(400, 'Verses must be under 300 characters.');
+  const out = [];
+  for (const piece of value.split(/[,;]+/)) {
+    const part = piece.toLowerCase().replace(/bhagavad|gita|bg|chapter|ch\.?|verse|text|\s+/g, ' ').trim();
+    if (!part) continue;
+    const match = part.match(/^(\d{1,2})(?:\s*[.:]\s*(\d{1,2})(?:\s*-\s*(\d{1,2}))?)?$/);
+    const chapter = Number(match?.[1]);
+    if (!match || chapter < 1 || chapter > 18) throw fail(400, `"${piece.trim()}" is not a Gita reference. Use chapter.verse, like 2.13 or 3.19-21.`);
+    if (!match[2]) { out.push(String(chapter)); continue; }
+    const from = Number(match[2]);
+    const to = Number(match[3] || match[2]);
+    if (from < 1 || to < from || to > GITA_VERSES[chapter - 1] || to - from > 20) throw fail(400, `Chapter ${chapter} has verses 1-${GITA_VERSES[chapter - 1]}.`);
+    for (let verse = from; verse <= to; verse += 1) out.push(`${chapter}.${verse}`);
+  }
+  const unique = [...new Set(out)];
+  if (unique.length > 40) throw fail(400, 'Add at most 40 verses.');
+  return unique.length ? unique.join(',') : null;
+}
+const normalizeTopics = value => {
+  if (value == null || value === '') return null;
+  const list = (Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [])
+    .map(topic => String(topic).trim().replace(/\s+/g, ' ')).filter(Boolean);
+  if (list.some(topic => topic.length > 40)) throw fail(400, 'Each topic must be under 40 characters.');
+  const unique = list.filter((topic, index) => list.findIndex(other => other.toLowerCase() === topic.toLowerCase()) === index);
+  if (unique.length > 8) throw fail(400, 'Add at most 8 topics.');
+  return unique.length ? unique.join(',') : null;
+};
+// Reads optional tags; fields that are missing keep their current values.
+function tagFields(body, current = {}) {
+  const pick = (key, read) => (body[key] === undefined ? current[key] ?? null : read(body[key]));
+  return {
+    language: pick('language', value => {
+      if (value == null || value === '') return null;
+      if (!LANGUAGES.includes(value)) throw fail(400, 'Choose a listed language.');
+      return value;
+    }),
+    speaker: pick('speaker', value => (value == null || value === '' ? null : text(value, 'Speaker', 80))),
+    verses: pick('verses', normalizeVerses),
+    topics: pick('topics', normalizeTopics),
+  };
+}
+const fingerprintOf = value => (typeof value === 'string' && /^\d{1,15}:[a-f0-9]{64}$/.test(value) ? value : null);
+const likeEscape = value => value.replace(/[\\%_]/g, char => `\\${char}`);
+const TEXT_LIMIT = 60_000;
 
 // Turns Google API failures into actionable messages; raw details are shown only to site admins connecting a Drive.
 export function googleProblem(error, purpose) {
@@ -85,6 +137,7 @@ function configuration(overrides) {
     siteAdmins: (process.env.SITE_ADMIN_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
     serviceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
     encryptionKey: process.env.STORAGE_ENCRYPTION_KEY || '',
+    cronSecret: process.env.CRON_SECRET || '',
     ...overrides,
   };
   if (new URL(config.origin).origin !== config.origin) throw new Error('APP_ORIGIN must be an origin without a trailing slash.');
@@ -147,7 +200,9 @@ export function createApp(overrides = {}) {
     // Upload chunks are bounded by the upload size limit, so they don't count towards the request rate.
     skip: req => req.method === 'PUT' && req.path.startsWith('/uploads/'),
     message: { error: 'Too many requests. Please try again in a minute.' } }));
-  app.use(express.json({ limit: '32kb' }));
+  // Document text for search is larger than other request bodies.
+  const jsonBody = express.json({ limit: '32kb' });
+  app.use((req, res, next) => (/^\/api\/content\/[^/]+\/text$/.test(req.path) ? next() : jsonBody(req, res, next)));
   app.use('/api', (req, res, next) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('origin') !== config.origin) {
       return next(fail(403, 'Request origin is not allowed. Refresh the application and try again.'));
@@ -348,10 +403,18 @@ export function createApp(overrides = {}) {
     res.type(thumb.mime).send(Buffer.from(thumb.data));
   }));
 
+  // Vercel Cron calls this with `Authorization: Bearer $CRON_SECRET`; it runs without a user session.
+  app.get('/api/cron/backup', h(async (req, res) => {
+    if (!cronAuthorized(req.get('authorization'), config.cronSecret)) throw fail(401, 'Unauthorized.');
+    const record = await createBackup({ db, config });
+    res.status(record.ok ? 200 : 500).json(record.ok ? { ok: true } : { ok: false, error: record.error });
+  }));
+
   app.use('/api', authenticated);
   const contentQuery = `SELECT c.*, u.name AS uploader, r.name AS reviewer, p.title AS parent_title,
     EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked,
     EXISTS(SELECT 1 FROM thumbnails t WHERE t.content_id = c.id) AS has_thumb,
+    EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id) AS has_text,
     (SELECT count(*) FROM content_views v WHERE v.content_id = c.id) AS views,
     (SELECT count(*) FROM content a WHERE a.parent_id = c.id AND a.status = 'approved') AS parts
     FROM content c JOIN users u ON u.id = c.uploader_id
@@ -383,6 +446,43 @@ export function createApp(overrides = {}) {
     return parent;
   }
   const count = async (sql, ...args) => (await db.get(sql, ...args)).n;
+  async function notify(userId, kind, title, body = '', contentId = null, link = null) {
+    if (!userId) return;
+    await db.run(`INSERT INTO notifications (id, user_id, kind, title, body, content_id, link, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+      randomUUID(), userId, kind, title.slice(0, 200), String(body || '').slice(0, 500), contentId, link, new Date().toISOString());
+  }
+  async function openRequest(value) {
+    if (value == null || value === '') return null;
+    if (typeof value !== 'string' || value.length > 80) throw fail(400, 'Choose a valid request.');
+    const request = await db.get("SELECT id FROM content_requests WHERE id = ? AND status = 'open'", value);
+    if (!request) throw fail(409, 'That request is no longer open.');
+    return request.id;
+  }
+  // Called whenever content becomes approved: tells the contributor and closes the request it answered.
+  async function published(item, reviewerId) {
+    if (reviewerId && item.uploader_id !== reviewerId) {
+      await notify(item.uploader_id, 'approved', `Approved: ${item.title}`, item.parent_id ? 'Your addition is now live.' : 'Your contribution is now in the library.', item.id);
+    }
+    if (!item.request_id || item.parent_id) return;
+    const request = await db.get("SELECT * FROM content_requests WHERE id = ? AND status = 'open'", item.request_id);
+    if (!request) return;
+    const done = await db.run(`UPDATE content_requests SET status = 'fulfilled', content_id = ?, fulfilled_by = ?, closed_at = ?
+      WHERE id = ? AND status = 'open'`, item.id, item.uploader_id, new Date().toISOString(), request.id);
+    if (!done.changes) return;
+    const voters = await db.all('SELECT user_id FROM request_votes WHERE request_id = ?', request.id);
+    for (const userId of new Set([request.user_id, ...voters.map(row => row.user_id)])) {
+      if (userId !== item.uploader_id) await notify(userId, 'request', `Request fulfilled: ${request.title}`, `"${item.title}" was added to the library.`, item.id);
+    }
+  }
+  const strip = ({ storage_key, fingerprint, ...item }) => item;
+  const snippetFrom = (body, tokens) => {
+    const lower = body.toLowerCase();
+    const at = tokens.map(token => lower.indexOf(token)).filter(index => index >= 0).sort((a, b) => a - b)[0];
+    if (at == null) return null;
+    const start = Math.max(0, at - 60);
+    return `${start ? '…' : ''}${body.slice(start, at + 140).replace(/\s+/g, ' ').trim()}…`;
+  };
+  // Without `limit` every match is returned (used by review); with it, results are paged.
   app.get('/api/content', h(async (req, res) => {
     const scope = req.query.scope || 'library';
     if (!['library', 'mine', 'review', 'saved'].includes(scope)) throw fail(400, 'Unknown content view.');
@@ -391,17 +491,105 @@ export function createApp(overrides = {}) {
       library: "c.status = 'approved' AND c.visibility = 'public' AND c.parent_id IS NULL", mine: 'c.uploader_id = ?',
       review: "c.status = 'pending'", saved: "c.status = 'approved' AND c.visibility = 'public' AND c.parent_id IS NULL AND EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?)",
     };
-    const params = [req.user.id];
-    if (scope === 'mine' || scope === 'saved') params.push(req.user.id);
-    const rows = await db.all(`${contentQuery} WHERE ${clauses[scope]} ORDER BY c.created_at DESC`, ...params);
-    res.json({ items: rows.map(({ storage_key, ...item }) => item) });
+    const where = [clauses[scope]];
+    const params = scope === 'mine' || scope === 'saved' ? [req.user.id] : [];
+    const param = name => (typeof req.query[name] === 'string' ? req.query[name].trim() : '');
+
+    if (scope === 'mine' && ['pending', 'approved', 'rejected'].includes(param('status'))) { where.push('c.status = ?'); params.push(param('status')); }
+    if (LANGUAGES.includes(param('language'))) { where.push('c.language = ?'); params.push(param('language')); }
+    if (param('speaker') && param('speaker').length <= 80) { where.push('c.speaker = ? COLLATE NOCASE'); params.push(param('speaker')); }
+    if (param('topic') && param('topic').length <= 40) {
+      where.push("(',' || c.topics || ',') LIKE ? ESCAPE '\\'");
+      params.push(`%,${likeEscape(param('topic'))},%`);
+    }
+    const chapter = Number(param('chapter'));
+    if (Number.isInteger(chapter) && chapter >= 1 && chapter <= 18) {
+      where.push("((',' || c.verses || ',') LIKE ? OR (',' || c.verses || ',') LIKE ?)");
+      params.push(`%,${chapter}.%`, `%,${chapter},%`);
+    }
+    const q = param('q').slice(0, 100);
+    const tokens = [...new Set(q.toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 8);
+    for (const token of tokens) {
+      const like = `%${likeEscape(token)}%`;
+      const verse = token.match(/^(\d{1,2})[.:](\d{1,2})$/);
+      where.push(`(c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\'
+        OR c.speaker LIKE ? ESCAPE '\\' OR c.topics LIKE ? ESCAPE '\\' OR c.original_name LIKE ? ESCAPE '\\'
+        OR EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id AND x.body LIKE ? ESCAPE '\\')
+        ${verse ? "OR (',' || c.verses || ',') LIKE ? OR (',' || c.verses || ',') LIKE ?" : ''})`);
+      params.push(like, like, like, like, like, like, like);
+      if (verse) params.push(`%,${Number(verse[1])}.${Number(verse[2])},%`, `%,${Number(verse[1])},%`);
+    }
+    // Type counts ignore the type filter so the chips show how many of each kind match.
+    const base = where.join(' AND ');
+    const baseParams = [...params];
+    if (TYPES.includes(param('type'))) { where.push('c.type = ?'); params.push(param('type')); }
+    const filter = where.join(' AND ');
+
+    const orders = {
+      newest: 'c.created_at DESC', oldest: 'c.created_at ASC', title: 'c.title COLLATE NOCASE ASC', popular: 'views DESC, c.created_at DESC',
+    };
+    const sort = orders[param('sort')] ? param('sort') : 'newest';
+    const relevance = q ? "CASE WHEN c.title LIKE ? ESCAPE '\\' THEN 0 WHEN c.title LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END, " : '';
+    const orderParams = q ? [`${likeEscape(q)}%`, `%${likeEscape(q)}%`] : [];
+    const limit = Number(param('limit'));
+    const paged = Number.isInteger(limit) && limit > 0;
+    const offset = Math.max(0, Number.parseInt(param('offset'), 10) || 0);
+    const page = paged ? ` LIMIT ${Math.min(limit, 100)} OFFSET ${offset}` : '';
+    const rows = await db.all(`${contentQuery} WHERE ${filter} ORDER BY ${relevance}${orders[sort]}${page}`, req.user.id, ...params, ...orderParams);
+
+    if (tokens.length) {
+      const withText = rows.filter(row => row.has_text && !tokens.some(token => row.title.toLowerCase().includes(token)));
+      if (withText.length) {
+        const bodies = await db.all(`SELECT content_id, body FROM content_text WHERE content_id IN (${withText.map(() => '?').join(',')})`, ...withText.map(row => row.id));
+        for (const { content_id: id, body } of bodies) {
+          const row = rows.find(item => item.id === id);
+          row.snippet = snippetFrom(String(body), tokens);
+        }
+      }
+    }
+    const from = 'FROM content c JOIN users u ON u.id = c.uploader_id';
+    const total = paged ? Number(await count(`SELECT count(*) AS n ${from} WHERE ${filter}`, ...params)) : rows.length;
+    const typeRows = paged && offset === 0 ? await db.all(`SELECT c.type, count(*) AS n ${from} WHERE ${base} GROUP BY c.type`, ...baseParams) : null;
+    res.json({
+      items: rows.map(strip), total, hasMore: paged ? offset + rows.length < total : false,
+      ...(typeRows ? { counts: Object.fromEntries(typeRows.map(row => [row.type, Number(row.n)])) } : {}),
+    });
+  }));
+  app.get('/api/content/facets', h(async (req, res) => {
+    const rows = await db.all(`SELECT language, speaker, topics, verses FROM content
+      WHERE status = 'approved' AND visibility = 'public' AND parent_id IS NULL
+        AND (language IS NOT NULL OR speaker IS NOT NULL OR topics IS NOT NULL OR verses IS NOT NULL)`);
+    const tally = values => [...values.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map())]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name, n]) => ({ name, count: n }));
+    res.json({
+      languages: tally(rows.map(row => row.language).filter(Boolean)),
+      speakers: tally(rows.map(row => row.speaker).filter(Boolean)).slice(0, 50),
+      topics: tally(rows.flatMap(row => (row.topics ? row.topics.split(',') : []))).slice(0, 50),
+      chapters: tally(rows.flatMap(row => [...new Set((row.verses ? row.verses.split(',') : []).map(ref => ref.split('.')[0]))]))
+        .sort((a, b) => Number(a.name) - Number(b.name)),
+    });
+  }));
+  app.get('/api/content/:id', h(async (req, res) => {
+    const { item } = await getContent(req);
+    res.json({ item: strip(item) });
   }));
   app.get('/api/content/:id/parts', h(async (req, res) => {
     const { item } = await getContent(req);
     const rows = await db.all(`${contentQuery} WHERE c.parent_id = ?
       AND (c.status = 'approved' OR c.uploader_id = ? OR (? = 1 AND c.status = 'pending'))
       ORDER BY c.created_at`, req.user.id, item.id, req.user.id, isReviewer(req.user) ? 1 : 0);
-    res.json({ items: rows.map(({ storage_key, ...part }) => part) });
+    res.json({ items: rows.map(strip) });
+  }));
+  // Text is read from documents in the uploader's (or an admin's) browser and stored only for search.
+  app.put('/api/content/:id/text', express.json({ limit: '256kb' }), h(async (req, res) => {
+    const { item } = await getContent(req);
+    if (item.uploader_id !== req.user.id && !isReviewer(req.user)) throw fail(403, 'Only the uploader or an admin can add document text.');
+    if (item.type !== 'doc') throw fail(400, 'Only documents have searchable text.');
+    if (typeof req.body.text !== 'string') throw fail(400, 'Send the document text.');
+    const body = req.body.text.replace(/\u0000/g, '').replace(/[ \t]+/g, ' ').slice(0, TEXT_LIMIT);
+    await db.run(`INSERT INTO content_text (content_id, body, created_at) VALUES (?, ?, ?)
+      ON CONFLICT(content_id) DO UPDATE SET body = excluded.body, created_at = excluded.created_at`, item.id, body, new Date().toISOString());
+    res.json({ ok: true, length: body.length });
   }));
   app.get('/api/overview', h(async (req, res) => {
     const approved = await count("SELECT count(*) AS n FROM content WHERE status = 'approved' AND visibility = 'public'");
@@ -429,7 +617,29 @@ export function createApp(overrides = {}) {
       nearlyFull: measured.filter(node => Number(node.quota_limit) > 0 && Number(node.quota_usage || 0) / Number(node.quota_limit) >= 0.9)
         .map(node => ({ name: node.name, percent: Math.min(100, Math.round(Number(node.quota_usage || 0) / Number(node.quota_limit) * 100)) })),
     };
-    res.json({ approved, contributions, pending, members, types, storage });
+    const weeksAgo = new Date(Date.now() - 12 * 7 * 86400_000).toISOString();
+    const recent = await db.all('SELECT created_at FROM content WHERE parent_id IS NULL AND created_at >= ?', weeksAgo);
+    const weekly = Array.from({ length: 12 }, (_, index) => {
+      const end = Date.now() - (11 - index) * 7 * 86400_000;
+      const start = end - 7 * 86400_000;
+      return { start: new Date(start).toISOString(), uploads: recent.filter(row => Date.parse(row.created_at) > start && Date.parse(row.created_at) <= end).length };
+    });
+    const tagged = await db.all("SELECT language, topics FROM content WHERE status = 'approved' AND visibility = 'public' AND parent_id IS NULL");
+    const tally = values => [...values.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map())]
+      .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, n]) => ({ name, count: n }));
+    const analytics = {
+      topViewed: (await db.all(`SELECT c.id, c.title, c.type, count(v.user_id) AS views FROM content c JOIN content_views v ON v.content_id = c.id
+        WHERE c.status = 'approved' AND c.visibility = 'public' GROUP BY c.id, c.title, c.type ORDER BY views DESC LIMIT 10`))
+        .map(row => ({ ...row, views: Number(row.views) })),
+      topContributors: (await db.all(`SELECT u.id, u.name, count(c.id) AS approved FROM users u JOIN content c ON c.uploader_id = u.id
+        WHERE c.status = 'approved' GROUP BY u.id, u.name ORDER BY approved DESC LIMIT 10`)).map(row => ({ ...row, approved: Number(row.approved) })),
+      weekly,
+      viewsLast30: Number(await count('SELECT count(*) AS n FROM content_views WHERE viewed_at >= ?', new Date(Date.now() - 30 * 86400_000).toISOString())),
+      languages: tally(tagged.map(row => row.language || 'Not set')),
+      topics: tally(tagged.flatMap(row => (row.topics ? row.topics.split(',') : []))),
+      openRequests: Number(await count("SELECT count(*) AS n FROM content_requests WHERE status = 'open'")),
+    };
+    res.json({ approved, contributions, pending, members, types, storage, analytics });
   }));
   app.get('/api/leaderboard', h(async (req, res) => {
     const rows = await db.all(`SELECT u.id, u.name, u.role, count(c.id) * ${POINTS_PER_APPROVAL} AS points FROM users u
@@ -476,11 +686,14 @@ export function createApp(overrides = {}) {
     try { parsed = new URL(url); } catch { throw fail(400, 'Enter a valid link.'); }
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw fail(400, 'Links must start with http:// or https:// and cannot contain credentials.');
     const parent = await additionTarget(req);
+    const tags = tagFields(req.body);
+    const requestId = parent ? null : await openRequest(req.body.requestId);
     const id = randomUUID();
     const review = initialReview(req.user);
-    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at)
-      VALUES (?,?,?,'link',?,?,?,?,?,?,?)`, id, title, description, url, review.status, req.user.id, new Date().toISOString(), parent?.id ?? null,
-    review.reviewedBy, review.reviewedAt);
+    await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at,language,speaker,verses,topics,request_id)
+      VALUES (?,?,?,'link',?,?,?,?,?,?,?,?,?,?,?,?)`, id, title, description, url, review.status, req.user.id, new Date().toISOString(), parent?.id ?? null,
+    review.reviewedBy, review.reviewedAt, tags.language, tags.speaker, tags.verses, tags.topics, requestId);
+    if (review.status === 'approved') await published({ id, title, uploader_id: req.user.id, parent_id: parent?.id ?? null, request_id: requestId }, null);
     await audit(db, req.user.id, parent ? 'Added to upload' : review.action, parent ? `${title} → ${parent.title}` : title);
     res.status(201).json({ id, status: review.status, message: review.message });
   }));
@@ -522,12 +735,16 @@ export function createApp(overrides = {}) {
     const type = classify(mime);
     if (!Number.isInteger(size) || size < 1) throw fail(400, 'Empty files cannot be uploaded.');
     const parent = await additionTarget(req);
+    const tags = tagFields(req.body);
+    const requestId = parent ? null : await openRequest(req.body.requestId);
     const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
     const id = randomUUID();
     const started = await storage.startUpload({ id, target, name, mime, size, type });
-    await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at,parent_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, mime, name, size,
-    started.node, started.sessionUri, Date.now(), parent?.id ?? null);
+    await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at,parent_id,
+      language,speaker,verses,topics,fingerprint,request_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, mime, name, size,
+    started.node, started.sessionUri, Date.now(), parent?.id ?? null,
+    tags.language, tags.speaker, tags.verses, tags.topics, fingerprintOf(req.body.fingerprint), requestId);
     res.status(201).json({ id, chunkSize: CHUNK_SIZE });
   }));
   const ownUpload = async req => {
@@ -607,10 +824,12 @@ export function createApp(overrides = {}) {
             throw fail(409, 'The upload you were adding to is no longer available.');
           }
           await db.run(`INSERT INTO content
-            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
+            (id,title,description,type,mime,original_name,size,storage_node,storage_key,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at,
+              language,speaker,verses,topics,fingerprint,request_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, upload.title, upload.description, upload.type, upload.mime,
           upload.original_name, upload.size, upload.node, completedKey, review.status, req.user.id, new Date().toISOString(), upload.parent_id ?? null,
-          review.reviewedBy, review.reviewedAt);
+          review.reviewedBy, review.reviewedAt, upload.language ?? null, upload.speaker ?? null, upload.verses ?? null, upload.topics ?? null,
+          upload.fingerprint ?? null, upload.request_id ?? null);
           created = true;
         } catch (error) {
           if (error.status === 409) throw error;
@@ -621,6 +840,9 @@ export function createApp(overrides = {}) {
       await db.run('DELETE FROM uploads WHERE id = ? AND chunk_lock = ?', upload.id, token);
       locked = false;
       if (created) await audit(db, req.user.id, upload.parent_id ? 'Added to upload' : review.action, upload.title);
+      if (created && review.status === 'approved') {
+        await published({ id, title: upload.title, uploader_id: req.user.id, parent_id: upload.parent_id ?? null, request_id: upload.request_id ?? null }, null);
+      }
       const status = created ? 201 : 200;
       const saved = await db.get('SELECT status FROM content WHERE id = ?', id);
       const finalStatus = saved?.status || review.status;
@@ -632,6 +854,88 @@ export function createApp(overrides = {}) {
   }));
   app.delete('/api/uploads/:id', h(async (req, res) => {
     await discard(await ownUpload(req));
+    res.json({ ok: true });
+  }));
+
+  // Warns before uploading something the library already has. Only matches the user may see are reported.
+  app.post('/api/uploads/check', h(async (req, res) => {
+    const fingerprints = Array.isArray(req.body.fingerprints) ? req.body.fingerprints.map(fingerprintOf).filter(Boolean).slice(0, 50) : [];
+    const urls = Array.isArray(req.body.urls) ? req.body.urls.filter(url => typeof url === 'string' && url.length <= 2048).slice(0, 50) : [];
+    const matches = [];
+    const seen = row => visible(row, req.user) && row.status !== 'rejected';
+    for (const fingerprint of new Set(fingerprints)) {
+      const row = (await db.all("SELECT id, title, status, visibility, uploader_id FROM content WHERE fingerprint = ? AND status != 'rejected' ORDER BY created_at LIMIT 5", fingerprint)).find(seen);
+      if (row) matches.push({ fingerprint, id: row.id, title: row.title, status: row.status });
+    }
+    for (const url of new Set(urls)) {
+      const row = (await db.all("SELECT id, title, status, visibility, uploader_id FROM content WHERE type = 'link' AND url = ? AND status != 'rejected' ORDER BY created_at LIMIT 5", url.trim())).find(seen);
+      if (row) matches.push({ url, id: row.id, title: row.title, status: row.status });
+    }
+    res.json({ matches });
+  }));
+
+  app.get('/api/notifications', h(async (req, res) => {
+    const items = await db.all('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 30', req.user.id);
+    const unread = Number(await count('SELECT count(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', req.user.id));
+    const pendingReview = isReviewer(req.user)
+      ? Number(await count("SELECT count(*) AS n FROM content WHERE status = 'pending' AND (? = 'site_admin' OR uploader_id != ?)", req.user.role, req.user.id))
+      : 0;
+    res.json({ items: items.map(({ user_id, ...item }) => item), unread, pendingReview });
+  }));
+  app.post('/api/notifications/read', h(async (req, res) => {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(id => typeof id === 'string').slice(0, 100) : null;
+    const now = new Date().toISOString();
+    if (ids) {
+      for (const id of ids) await db.run('UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL', now, id, req.user.id);
+    } else {
+      await db.run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL', now, req.user.id);
+    }
+    res.json({ ok: true });
+  }));
+
+  // Members ask for content that is missing; anyone can +1 and contributors can upload against a request.
+  app.get('/api/requests', h(async (req, res) => {
+    const status = ['open', 'fulfilled', 'closed'].includes(req.query.status) ? req.query.status : 'open';
+    const rows = await db.all(`SELECT r.*, u.name AS requester, c.title AS content_title,
+        (SELECT count(*) FROM request_votes v WHERE v.request_id = r.id) AS votes,
+        EXISTS(SELECT 1 FROM request_votes v WHERE v.request_id = r.id AND v.user_id = ?) AS voted
+      FROM content_requests r JOIN users u ON u.id = r.user_id LEFT JOIN content c ON c.id = r.content_id
+      WHERE r.status = ? ORDER BY ${status === 'open' ? 'votes DESC, r.created_at DESC' : 'r.closed_at DESC'} LIMIT 100`, req.user.id, status);
+    res.json({ items: rows.map(row => ({ ...row, votes: Number(row.votes), voted: Boolean(row.voted), mine: row.user_id === req.user.id })) });
+  }));
+  app.post('/api/requests', h(async (req, res) => {
+    const title = text(req.body.title, 'Request', 160, 5);
+    const details = text(req.body.details || '', 'Details', 1000, 0);
+    const language = req.body.language ? tagFields({ language: req.body.language }).language : null;
+    const open = Number(await count("SELECT count(*) AS n FROM content_requests WHERE user_id = ? AND status = 'open'", req.user.id));
+    if (open >= 10) throw fail(429, 'You already have 10 open requests. Close one before adding another.');
+    const id = randomUUID();
+    await db.run('INSERT INTO content_requests (id, user_id, title, details, language, created_at) VALUES (?,?,?,?,?,?)',
+      id, req.user.id, title, details, language, new Date().toISOString());
+    await db.run('INSERT INTO request_votes (request_id, user_id) VALUES (?, ?)', id, req.user.id);
+    await audit(db, req.user.id, 'Requested content', title);
+    res.status(201).json({ id });
+  }));
+  const contentRequest = async id => {
+    const request = await db.get('SELECT * FROM content_requests WHERE id = ?', id);
+    if (!request) throw fail(404, 'Request not found.');
+    return request;
+  };
+  app.post('/api/requests/:id/vote', h(async (req, res) => {
+    const request = await contentRequest(req.params.id);
+    if (request.status !== 'open') throw fail(409, 'This request is no longer open.');
+    const current = await db.get('SELECT 1 AS found FROM request_votes WHERE request_id = ? AND user_id = ?', request.id, req.user.id);
+    if (current) await db.run('DELETE FROM request_votes WHERE request_id = ? AND user_id = ?', request.id, req.user.id);
+    else await db.run('INSERT INTO request_votes (request_id, user_id) VALUES (?, ?)', request.id, req.user.id);
+    res.json({ voted: !current, votes: Number(await count('SELECT count(*) AS n FROM request_votes WHERE request_id = ?', request.id)) });
+  }));
+  app.post('/api/requests/:id/close', h(async (req, res) => {
+    const request = await contentRequest(req.params.id);
+    if (request.user_id !== req.user.id && !isReviewer(req.user)) throw fail(403, 'Only the requester or an admin can close this request.');
+    if (request.status !== 'open') throw fail(409, 'This request is already closed.');
+    await db.run("UPDATE content_requests SET status = 'closed', closed_at = ? WHERE id = ? AND status = 'open'", new Date().toISOString(), request.id);
+    if (request.user_id !== req.user.id) await notify(request.user_id, 'request', `Request closed: ${request.title}`, 'An admin closed this request.');
+    await audit(db, req.user.id, 'Closed request', request.title);
     res.json({ ok: true });
   }));
 
@@ -650,6 +954,8 @@ export function createApp(overrides = {}) {
       await db.run(`UPDATE content SET status = 'rejected', reviewed_by = ?, review_note = ?, reviewed_at = ?
         WHERE parent_id = ? AND status = 'pending'`, req.user.id, note, new Date().toISOString(), item.id);
     }
+    if (req.body.decision === 'approved') await published(item, req.user.id);
+    else if (item.uploader_id !== req.user.id) await notify(item.uploader_id, 'rejected', `Not approved: ${item.title}`, note, item.id);
     await audit(db, req.user.id, req.body.decision === 'approved' ? 'Approved content' : 'Rejected content', item.title);
     res.json({ ok: true });
   }));
@@ -668,6 +974,7 @@ export function createApp(overrides = {}) {
           AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
       req.user.id, new Date().toISOString(), item.id, Date.now());
       if (!result.changes) { skipped += 1; continue; }
+      await published(item, req.user.id);
       await audit(db, req.user.id, 'Approved content', item.title);
       approved += 1;
     }
@@ -694,6 +1001,7 @@ export function createApp(overrides = {}) {
         await db.run(`UPDATE content SET status = 'rejected', reviewed_by = ?, review_note = ?, reviewed_at = ?
           WHERE parent_id = ? AND status = 'pending'`, req.user.id, note, now, item.id);
       }
+      if (item.uploader_id !== req.user.id) await notify(item.uploader_id, 'rejected', `Not approved: ${item.title}`, note, item.id);
       await audit(db, req.user.id, 'Rejected content', item.title);
       rejected += 1;
     }
@@ -704,11 +1012,13 @@ export function createApp(overrides = {}) {
     const { item } = await getContent(req);
     const title = req.body.title === undefined ? item.title : text(req.body.title, 'Title');
     const description = req.body.description === undefined ? item.description || '' : text(req.body.description, 'Description', 2000, 0);
-    const changed = await db.run(`UPDATE content SET title = ?, description = ? WHERE id = ?
-      AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`, title, description, item.id, Date.now());
+    const tags = tagFields(req.body, item);
+    const changed = await db.run(`UPDATE content SET title = ?, description = ?, language = ?, speaker = ?, verses = ?, topics = ? WHERE id = ?
+      AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
+    title, description, tags.language, tags.speaker, tags.verses, tags.topics, item.id, Date.now());
     if (!changed.changes) throw fail(409, 'This content is being changed or is no longer available.');
     await audit(db, req.user.id, 'Edited content', item.title === title ? title : `${item.title} → ${title}`);
-    res.json({ ok: true, title, description });
+    res.json({ ok: true, title, description, ...tags });
   }));
 
   app.patch('/api/content/:id/visibility', h(async (req, res) => {
@@ -747,6 +1057,7 @@ export function createApp(overrides = {}) {
     if (reason.length < 5) throw fail(400, 'Write a reason (at least 5 characters) before removing content.');
     if (reason.length > 500) throw fail(400, 'Keep the reason under 500 characters.');
     await removeContent(item);
+    if (item.uploader_id !== req.user.id) await notify(item.uploader_id, 'removed', `Removed: ${item.title}`, reason);
     await audit(db, req.user.id, 'Deleted content', `${item.title} — Reason: ${reason}`);
     res.json({ ok: true });
   }));
@@ -784,12 +1095,14 @@ export function createApp(overrides = {}) {
       await db.run('DELETE FROM bookmarks WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content_views WHERE content_id = ?', part.id);
       await db.run('DELETE FROM thumbnails WHERE content_id = ?', part.id);
+      await db.run('DELETE FROM content_text WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content WHERE id = ?', part.id);
     }
     await removeStored(item, release);
     await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
     await db.run('DELETE FROM content_views WHERE content_id = ?', item.id);
     await db.run('DELETE FROM thumbnails WHERE content_id = ?', item.id);
+    await db.run('DELETE FROM content_text WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);
     if (!deleted.changes) throw fail(409, 'The content changed while it was being removed. Refresh and try again.');
   }
@@ -853,6 +1166,10 @@ export function createApp(overrides = {}) {
     if (user.role === 'site_admin') throw fail(403, 'Site administrator accounts are managed through server configuration.');
     if (!['user', 'org_admin'].includes(req.body.role)) throw fail(400, 'Choose a valid member role.');
     await db.run('UPDATE users SET role = ? WHERE id = ?', req.body.role, user.id);
+    if (user.role !== req.body.role) {
+      await notify(user.id, 'role', req.body.role === 'org_admin' ? 'You are now an org admin' : 'Your org admin role was removed',
+        req.body.role === 'org_admin' ? 'You can now review and approve submissions.' : '');
+    }
     await audit(db, req.user.id, req.body.role === 'org_admin' ? 'Made org admin' : 'Removed org admin', user.email);
     res.json({ ok: true });
   }));
@@ -926,6 +1243,16 @@ export function createApp(overrides = {}) {
     await db.run('DELETE FROM drives WHERE id = ?', node.id);
     await audit(db, req.user.id, 'Removed storage destination', node.name);
     res.json({ ok: true });
+  }));
+  app.get('/api/backups', siteAdmin, h(async (req, res) => {
+    const recent = await listBackups(db, 10);
+    res.json({ last: recent[0] || null, recent, scheduled: Boolean(config.cronSecret) });
+  }));
+  app.post('/api/backups', siteAdmin, h(async (req, res) => {
+    const record = await createBackup({ db, config });
+    if (!record.ok) throw fail(502, `Backup failed: ${record.error}`);
+    await audit(db, req.user.id, 'Backed up database', record.fileName);
+    res.status(201).json(record);
   }));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found.' }));

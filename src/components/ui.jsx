@@ -133,7 +133,7 @@ export function Avatar({ name = '', size = 'md' }) {
   const color = palette[[...name].reduce((sum, char) => sum + char.charCodeAt(0), 0) % palette.length];
   return (
     <span className={cx('inline-flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br font-semibold text-white shadow-sm', color,
-      { sm: 'h-7 w-7 text-[11px]', md: 'h-9 w-9 text-xs', lg: 'h-12 w-12 text-base' }[size])}>
+      { xs: 'h-5 w-5 text-[9px]', sm: 'h-7 w-7 text-[11px]', md: 'h-9 w-9 text-xs', lg: 'h-12 w-12 text-base' }[size])}>
       {initials}
     </span>
   );
@@ -192,13 +192,14 @@ export function SplashLoader() {
   );
 }
 
-export function EmptyState({ icon: Icon, title, action }) {
+export function EmptyState({ icon: Icon, title, description, action }) {
   return (
     <div className="card flex flex-col items-center px-6 py-16 text-center">
       <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-voice text-white shadow-glow">
         <Icon className="h-7 w-7" />
       </div>
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+      {description && <p className="mt-1 max-w-sm text-sm text-slate-500">{description}</p>}
       {action && <div className="mt-5">{action}</div>}
     </div>
   );

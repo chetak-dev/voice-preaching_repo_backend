@@ -687,3 +687,211 @@ test('admins are warned when a Drive is nearly full', async () => {
   assert.deepEqual(overview.storage.nearlyFull, [{ name: 'Full Drive', percent: 95 }]);
   assert.equal((await (await signIn('user'))('/api/overview')).json.storage, undefined, 'members never see storage details');  await db.run("DELETE FROM drives WHERE id IN ('full-drive', 'roomy-drive')");
 });
+
+test('site admins can back up the database; the nightly cron needs the secret', async () => {
+  const { gunzipSync } = await import('node:zlib');
+  const { readdirSync } = await import('node:fs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'kt-backup-test-'));
+  const secret = 'cron-secret-for-tests';
+  const backupApp = createApp({ production: false, dataDir: dir, databaseUrl: ':memory:', origin: ORIGIN, googleClientId: '', googleClientSecret: '',
+    siteAdmins: [], apiRateLimit: 2000, cronSecret: secret });
+  await backupApp.locals.ready;
+  const backupDb = backupApp.locals.db;
+  const hashed = hashPassword(TEST_PASSWORD);
+  for (const [id, email, role] of [['b-admin', 'badmin@example.test', 'site_admin'], ['b-user', 'buser@example.test', 'user']]) {
+    await backupDb.run('INSERT INTO users (id, email, name, role, created_at, password_hash) VALUES (?, ?, ?, ?, ?, ?)', id, email, id, role, new Date().toISOString(), hashed);
+  }
+  await backupDb.run(`INSERT INTO drives (id,name,folder_id,kind,types,created_at,enabled,refresh_token)
+    VALUES ('paused-drive','Paused Drive','folder-paused','oauth','[]',?,0,'secret-refresh-token')`, new Date().toISOString());
+  const backupServer = await new Promise(resolve => { const s = backupApp.listen(0, '127.0.0.1', () => resolve(s)); });
+  const url = `http://127.0.0.1:${backupServer.address().port}`;
+  const login = async email => {
+    const res = await fetch(`${url}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+      body: JSON.stringify({ email, password: TEST_PASSWORD }) });
+    assert.equal(res.status, 200);
+    const cookie = res.headers.get('set-cookie').split(';')[0];
+    return (route, method = 'GET', body) => fetch(`${url}${route}`, { method,
+      headers: { Cookie: cookie, Origin: ORIGIN, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body && JSON.stringify(body) });
+  };
+  try {
+    const admin = await login('badmin@example.test');
+    const member = await login('buser@example.test');
+    assert.equal((await admin('/api/content', 'POST', { title: 'Backed up talk', url: 'https://example.org/talk' })).status, 201);
+
+    assert.equal((await member('/api/backups', 'POST')).status, 403);
+    assert.equal((await member('/api/backups')).status, 403);
+    const empty = await (await admin('/api/backups')).json();
+    assert.equal(empty.last, null);
+    assert.equal(empty.scheduled, true);
+
+    const created = await admin('/api/backups', 'POST');
+    assert.equal(created.status, 201);
+    const record = await created.json();
+    assert.equal(record.ok, true);
+    assert.match(record.fileName, /^kalpa-taru-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.json\.gz$/);
+    const files = readdirSync(path.join(dir, 'backups'));
+    assert.ok(files.includes(record.fileName));
+    const raw = readFileSync(path.join(dir, 'backups', record.fileName));
+    const backup = JSON.parse(gunzipSync(raw).toString('utf8'));
+    assert.equal(backup.app, 'kalpa-taru');
+    assert.equal(backup.version, 1);
+    assert.ok(backup.tables.users.some(user => user.email === 'badmin@example.test'));
+    assert.ok(backup.tables.content.some(item => item.title === 'Backed up talk'));
+    assert.ok(backup.tables.drives.length === 1 && backup.tables.drives.every(drive => drive.refresh_token === null));
+    for (const excluded of ['sessions', 'oauth_states', 'uploads', 'thumbnails', 'backups']) assert.equal(backup.tables[excluded], undefined, excluded);
+    assert.ok(!raw.toString('latin1').includes('secret-refresh-token') && !gunzipSync(raw).toString('utf8').includes('secret-refresh-token'));
+
+    const listed = await (await admin('/api/backups')).json();
+    assert.equal(listed.last.fileName, record.fileName);
+    assert.equal(listed.last.ok, true);
+    const audited = await (await admin('/api/audit')).json();
+    assert.ok(JSON.stringify(audited).includes('Backed up database'));
+
+    assert.equal((await fetch(`${url}/api/cron/backup`)).status, 401);
+    assert.equal((await fetch(`${url}/api/cron/backup`, { headers: { Authorization: 'Bearer wrong-secret' } })).status, 401);
+    const cron = await fetch(`${url}/api/cron/backup`, { headers: { Authorization: `Bearer ${secret}` } });
+    assert.equal(cron.status, 200);
+    assert.deepEqual(await cron.json(), { ok: true });
+    assert.equal((await fetch(`${base}/api/cron/backup`, { headers: { Authorization: 'Bearer ' } })).status, 401, 'no secret configured means no cron access');
+  } finally {
+    backupServer.closeAllConnections();
+    await new Promise(resolve => backupServer.close(resolve));
+    backupDb.close();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('tags are validated, editable, and drive library filters, paging and search', async () => {
+  const admin = await signIn('site_admin');
+  const user = await signIn('user');
+  assert.equal((await admin('/api/content', { method: 'POST', body: { title: 'Bad verse', url: 'https://example.org/tag-bad', verses: '19.1' } })).status, 400);
+  assert.equal((await admin('/api/content', { method: 'POST', body: { title: 'Bad language', url: 'https://example.org/tag-bad2', language: 'Klingon' } })).status, 400);
+  const tagged = await admin('/api/content', { method: 'POST', body: {
+    title: 'Zeta tagging talk', url: 'https://example.org/tag-1', language: 'Odia', speaker: 'HG Tag Prabhu', verses: 'BG 2.13, 3:19-20', topics: 'Karma, Soul,karma' } });
+  assert.equal(tagged.status, 201);
+  const row = (await user(`/api/content/${tagged.json.id}`)).json.item;
+  assert.equal(row.verses, '2.13,3.19,3.20');
+  assert.equal(row.topics, 'Karma,Soul');
+  assert.equal(row.fingerprint, undefined);
+  for (const query of ['language=Odia', 'speaker=hg%20tag%20prabhu', 'topic=soul', 'chapter=3', 'q=2:13', 'q=zeta%20tag']) {
+    assert.ok((await user(`/api/content?scope=library&${query}`)).json.items.some(item => item.id === tagged.json.id), query);
+  }
+  assert.ok(!(await user('/api/content?scope=library&chapter=4')).json.items.some(item => item.id === tagged.json.id));
+  assert.ok(!(await user('/api/content?scope=library&q=zeta%20nothing')).json.items.some(item => item.id === tagged.json.id), 'all words must match');
+  assert.equal((await user('/api/content?scope=library&q=100%25')).status, 200);
+
+  const facets = (await user('/api/content/facets')).json;
+  assert.ok(facets.languages.some(entry => entry.name === 'Odia'));
+  assert.ok(facets.topics.some(entry => entry.name === 'Karma'));
+  assert.ok(facets.chapters.some(entry => entry.name === '2'));
+
+  const page = (await user('/api/content?scope=library&limit=2&offset=0&sort=title')).json;
+  assert.equal(page.items.length, 2);
+  assert.ok(page.total >= 3 && page.hasMore);
+  assert.ok(page.counts.link >= 1);
+  const next = (await user('/api/content?scope=library&limit=2&offset=2&sort=title')).json;
+  assert.ok(!next.items.some(item => page.items.some(other => other.id === item.id)), 'pages do not overlap');
+
+  assert.equal((await user(`/api/content/${tagged.json.id}`, { method: 'PATCH', body: { language: 'Hindi' } })).status, 403);
+  const edited = await admin(`/api/content/${tagged.json.id}`, { method: 'PATCH', body: { language: 'Hindi', topics: '' } });
+  assert.equal(edited.json.language, 'Hindi');
+  assert.equal(edited.json.topics, null);
+  assert.equal(edited.json.speaker, 'HG Tag Prabhu', 'fields that are not sent are kept');
+});
+
+test('document text is searchable with a snippet and only the uploader or an admin can set it', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const admin = await signIn('site_admin');
+  const body = Buffer.from('plain notes');
+  const started = await user('/api/uploads', { method: 'POST', body: { title: 'Text notes', name: 'notes.txt', mime: 'text/plain', size: body.length } });
+  const done = await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: body });
+  const id = done.json.id;
+  const long = `${'intro '.repeat(5000)}the eternal soul is never born and never dies`;
+  assert.equal((await user(`/api/content/${id}/text`, { method: 'PUT', body: { text: long } })).status, 200, 'large text bodies are accepted');
+  await admin(`/api/content/${id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  assert.equal((await viewer(`/api/content/${id}/text`, { method: 'PUT', body: { text: 'spam' } })).status, 403);
+  const found = (await viewer('/api/content?scope=library&q=never%20dies&limit=10')).json.items.find(item => item.id === id);
+  assert.ok(found, 'text inside documents is searched');
+  assert.match(found.snippet, /never born/);
+  assert.equal(found.has_text, 1);
+  const link = (await admin('/api/content', { method: 'POST', body: { title: 'Not a doc', url: 'https://example.org/text-link' } })).json;
+  assert.equal((await admin(`/api/content/${link.id}/text`, { method: 'PUT', body: { text: 'x' } })).status, 400);
+  assert.equal((await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON })).status, 200, 'content with text can be removed');
+});
+
+test('members are notified about reviews, removals and role changes, and can mark them read', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const orgAdmin = await signIn('org_admin');
+  await user('/api/notifications/read', { method: 'POST', body: {} });
+  const a = (await user('/api/content', { method: 'POST', body: { title: 'Notify approve', url: 'https://example.org/n-1' } })).json;
+  const b = (await user('/api/content', { method: 'POST', body: { title: 'Notify reject', url: 'https://example.org/n-2' } })).json;
+  assert.ok((await orgAdmin('/api/notifications')).json.pendingReview >= 2, 'reviewers see the pending count');
+  assert.equal((await user('/api/notifications')).json.pendingReview, 0);
+  await orgAdmin(`/api/content/${a.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  await orgAdmin(`/api/content/${b.id}/review`, { method: 'POST', body: { decision: 'rejected', note: 'Audio too quiet' } });
+  await admin(`/api/content/${a.id}`, { method: 'DELETE', body: { reason: 'Duplicate of another talk' } });
+  let inbox = (await user('/api/notifications')).json;
+  assert.equal(inbox.unread, 3);
+  assert.deepEqual(inbox.items.slice(0, 3).map(item => item.kind), ['removed', 'rejected', 'approved']);
+  assert.equal(inbox.items[1].body, 'Audio too quiet');
+  await user('/api/notifications/read', { method: 'POST', body: { ids: [inbox.items[0].id] } });
+  assert.equal((await user('/api/notifications')).json.unread, 2);
+  await user('/api/notifications/read', { method: 'POST', body: {} });
+  inbox = (await user('/api/notifications')).json;
+  assert.equal(inbox.unread, 0);
+  assert.ok(!(await admin('/api/notifications')).json.items.some(item => item.title.includes('Notify')), 'notifications are private');
+});
+
+test('content requests can be voted on, fulfilled by an approved upload, and closed', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const admin = await signIn('site_admin');
+  assert.equal((await user('/api/requests', { method: 'POST', body: { title: 'Hi' } })).status, 400);
+  const request = (await user('/api/requests', { method: 'POST', body: { title: 'Lecture on BG 2.47', language: 'Odia' } })).json;
+  const vote = await viewer(`/api/requests/${request.id}/vote`, { method: 'POST' });
+  assert.deepEqual(vote.json, { voted: true, votes: 2 });
+  assert.equal((await viewer(`/api/requests/${request.id}/close`, { method: 'POST' })).status, 403);
+  const open = (await viewer('/api/requests')).json.items.find(item => item.id === request.id);
+  assert.equal(open.voted, true);
+  assert.equal(open.requester, 'Test Member');
+
+  const answer = (await viewer('/api/content', { method: 'POST', body: { title: 'BG 2.47 class', url: 'https://example.org/req-1', requestId: request.id } })).json;
+  assert.equal((await viewer('/api/requests')).json.items.find(item => item.id === request.id).status, 'open', 'pending content does not fulfil a request');
+  await admin(`/api/content/${answer.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  const fulfilled = (await user('/api/requests?status=fulfilled')).json.items.find(item => item.id === request.id);
+  assert.equal(fulfilled.content_title, 'BG 2.47 class');
+  assert.ok((await user('/api/notifications')).json.items.some(item => item.kind === 'request' && item.content_id === answer.id));
+  assert.equal((await viewer('/api/content', { method: 'POST', body: { title: 'Late', url: 'https://example.org/req-2', requestId: request.id } })).status, 409);
+
+  const other = (await viewer('/api/requests', { method: 'POST', body: { title: 'Kirtan recordings please' } })).json;
+  assert.equal((await admin(`/api/requests/${other.id}/close`, { method: 'POST' })).status, 200);
+  assert.ok((await viewer('/api/requests?status=closed')).json.items.some(item => item.id === other.id));
+});
+
+test('duplicate checks find matching files and links the member can see', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const fingerprint = `${png.length}:${'ab'.repeat(32)}`;
+  const started = await user('/api/uploads', { method: 'POST', body: { title: 'Dupe logo', name: 'dupe.png', mime: 'image/png', size: png.length, fingerprint } });
+  const done = (await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png })).json;
+  await user('/api/content', { method: 'POST', body: { title: 'Dupe link', url: 'https://example.org/dupe' } });
+  const own = (await user('/api/uploads/check', { method: 'POST', body: { fingerprints: [fingerprint, 'junk'], urls: ['https://example.org/dupe'] } })).json;
+  assert.equal(own.matches.length, 2);
+  assert.equal(own.matches[0].id, done.id);
+  assert.equal((await viewer('/api/uploads/check', { method: 'POST', body: { fingerprints: [fingerprint] } })).json.matches.length, 0, 'pending uploads of others are not revealed');
+});
+
+test('admins get analytics in the overview; members do not', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  assert.equal((await user('/api/overview')).json.analytics, undefined);
+  const { analytics } = (await admin('/api/overview')).json;
+  assert.equal(analytics.weekly.length, 12);
+  assert.ok(analytics.weekly.at(-1).uploads > 0);
+  assert.ok(Array.isArray(analytics.topViewed) && Array.isArray(analytics.topContributors));
+  assert.ok(analytics.languages.length > 0);
+  assert.equal(typeof analytics.openRequests, 'number');
+});

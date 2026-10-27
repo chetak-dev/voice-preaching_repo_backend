@@ -1,15 +1,16 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Search, Trash2, TrendingUp, Undo2, UploadCloud, User } from 'lucide-react';
+import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Loader2, MessageSquarePlus, Search, SlidersHorizontal, Trash2, TrendingUp, Undo2, UploadCloud, User, X } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
 import { useMediaPlayer } from '../components/MediaPlayer.jsx';
 import { useEffect, useRef } from 'react';
 import {
-  Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useAsync, useToast,
+  Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useToast,
 } from '../components/ui.jsx';
 import { LIBRARY_TYPE_KEY } from './Overview.jsx';
 import { onThumbnail } from '../uploads.js';
 import { backfillThumbnails } from '../thumbnails.js';
+import { LANGUAGES, useFacets } from '../components/Tags.jsx';
 
 function formatResumeTime(value) {
   const seconds = Math.max(0, Math.floor(Number(value) || 0));
@@ -160,11 +161,24 @@ function SearchBox({ query, onQuery, pool, onPick }) {
   );
 }
 
-export default function Library({ scope, user, navigate, onChanged, onAddTo, sharedContentId }) {
+const PAGE_SIZE = 24;
+const FILTER_KEYS = ['language', 'chapter', 'speaker', 'topic'];
+const NO_FILTERS = { language: '', chapter: '', speaker: '', topic: '' };
+
+function useDebounced(value, delay) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return settled;
+}
+
+export default function Library({ scope, user, navigate, onChanged, onAddTo, sharedContentId, onSharedOpened }) {
   const toast = useToast();
   const home = scope === 'library';
-  const { data, loading, error, reload } = useAsync(() => api(`/content?scope=${scope}`), [scope]);
   const [query, setQuery] = useState('');
+  const q = useDebounced(query.trim(), 300);
   const [type, setType] = useState(() => {
     try {
       const picked = sessionStorage.getItem(LIBRARY_TYPE_KEY);
@@ -173,52 +187,118 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
     } catch { return 'all'; }
   });
   const [status, setStatus] = useState('all');
+  const [filters, setFilters] = useState(NO_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+  const activeFilters = FILTER_KEYS.filter(key => filters[key]).length;
+  const facets = useFacets();
   const [layout, setLayout] = useState('grid');
   const [sort, setSort] = useState(() => { try { return SORTS[localStorage.getItem(SORT_KEY)] ? localStorage.getItem(SORT_KEY) : 'newest'; } catch { return 'newest'; } });
   const changeSort = value => { setSort(value); try { localStorage.setItem(SORT_KEY, value); } catch { /* storage unavailable */ } };
   const [preview, setPreview] = useState(null);
   const [overrides, setOverrides] = useState({});
+  const pickTag = (key, value) => {
+    setFilters(current => ({ ...current, [key]: String(value) }));
+    setShowFilters(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
-  const items = useMemo(() => (data?.items || []).map(item => ({ ...item, ...overrides[item.id] })), [data, overrides]);
+  // The server filters, sorts and pages; more results load as the user scrolls.
+  const params = useMemo(() => {
+    const search = new URLSearchParams({ scope, sort });
+    if (q) search.set('q', q);
+    if (type !== 'all') search.set('type', type);
+    if (scope === 'mine' && status !== 'all') search.set('status', status);
+    for (const key of FILTER_KEYS) if (filters[key]) search.set(key, filters[key]);
+    return search.toString();
+  }, [scope, sort, q, type, status, filters]);
+  const [list, setList] = useState({ params: null, items: [], total: 0, hasMore: false, counts: {}, loading: true, error: null });
+  const [version, setVersion] = useState(0);
+  const reload = useCallback(() => setVersion(current => current + 1), []);
+  useEffect(() => {
+    let live = true;
+    setList(current => ({ ...current, loading: true, error: null }));
+    api(`/content?${params}&limit=${PAGE_SIZE}&offset=0`)
+      .then(result => live && setList({ params, items: result.items, total: result.total, hasMore: result.hasMore, counts: result.counts || {}, loading: false, error: null }))
+      .catch(err => live && setList(current => ({ ...current, loading: false, error: err })));
+    return () => { live = false; };
+  }, [params, version]);
+  const fetchingMore = useRef(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMore = useCallback(() => {
+    if (fetchingMore.current || !list.hasMore || list.params !== params) return;
+    fetchingMore.current = true;
+    setLoadingMore(true);
+    api(`/content?${params}&limit=${PAGE_SIZE}&offset=${list.items.length}`)
+      .then(result => setList(current => (current.params !== params ? current : {
+        ...current, total: result.total, hasMore: result.hasMore,
+        items: [...current.items, ...result.items.filter(item => !current.items.some(old => old.id === item.id))],
+      })))
+      .catch(err => toast(err.message, 'error'))
+      .finally(() => { fetchingMore.current = false; setLoadingMore(false); });
+  }, [list, params, toast]);
+  const sentinel = useRef(null);
+  useEffect(() => {
+    const node = sentinel.current;
+    if (!node || !list.hasMore) return undefined;
+    const observer = new IntersectionObserver(entries => { if (entries[0].isIntersecting) loadMore(); }, { rootMargin: '600px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [loadMore, list.hasMore]);
+  const data = list.params ? list : null;
+  const { loading, error } = list;
+
+  const withOverrides = useCallback(rows => rows.map(item => ({ ...item, ...overrides[item.id] })), [overrides]);
+  const items = useMemo(() => withOverrides(list.items), [list.items, withOverrides]);
   const { lastContentId, progressById, openPlayer, currentItem } = useMediaPlayer();
   const sharedOpenRef = useRef(null);
-  const continueItem = home && currentItem?.id !== lastContentId ? items.find(item => item.id === lastContentId && ['audio', 'video'].includes(item.type) && item.visibility !== 'private') : null;
+  const [lastPlayed, setLastPlayed] = useState(null);
+  useEffect(() => {
+    if (!home || !lastContentId) { setLastPlayed(null); return undefined; }
+    let live = true;
+    api(`/content/${encodeURIComponent(lastContentId)}`).then(({ item }) => live && setLastPlayed(item)).catch(() => live && setLastPlayed(null));
+    return () => { live = false; };
+  }, [home, lastContentId]);
+  const continueItem = home && lastPlayed && currentItem?.id !== lastContentId && lastPlayed.status === 'approved'
+    && ['audio', 'video'].includes(lastPlayed.type) && lastPlayed.visibility !== 'private' ? lastPlayed : null;
   const continueProgress = continueItem ? progressById[continueItem.id] : null;
 
   const markThumb = useCallback(id => setOverrides(current => ({ ...current, [id]: { ...current[id], has_thumb: 1 } })), []);
   useEffect(() => onThumbnail(markThumb), [markThumb]);
   useEffect(() => {
-    if (!data) return undefined;
+    if (!list.items.length) return undefined;
     const canSet = item => item.uploader_id === user.id || ['site_admin', 'org_admin'].includes(user.role);
-    return backfillThumbnails(data.items.filter(canSet), markThumb);
-  }, [data, user, markThumb]);
+    return backfillThumbnails(list.items.filter(canSet), markThumb);
+  }, [list.items, user, markThumb]);
 
   useEffect(() => {
-    if (!sharedContentId || !home || !data || sharedOpenRef.current === sharedContentId) return;
+    if (!sharedContentId || !home || sharedOpenRef.current === sharedContentId) return;
     sharedOpenRef.current = sharedContentId;
-    const shared = items.find(item => item.id === sharedContentId && item.visibility !== 'private');
-    if (shared) openItem(shared);
-    else toast('This shared item is unavailable or private.', 'error');
+    api(`/content/${encodeURIComponent(sharedContentId)}`)
+      .then(({ item }) => {
+        if (item.uploader_id !== user.id && (item.visibility === 'private' || item.status !== 'approved')) throw new Error('unavailable');
+        openItem(item);
+      })
+      .catch(() => toast('This item is unavailable or private.', 'error'))
+      .finally(() => onSharedOpened?.());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sharedContentId, home, data, items, toast]);
-  const visible = useMemo(() => items.filter(item => (scope !== 'saved' || item.bookmarked)
+  }, [sharedContentId, home, toast]);
+  const filtered = useMemo(() => items.filter(item => (scope !== 'saved' || item.bookmarked)
     && (scope !== 'library' || item.visibility !== 'private')), [items, scope]);
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return visible.filter(item => (type === 'all' || item.type === type)
-      && (status === 'all' || item.status === status)
-      && (!q || [item.title, item.description, item.uploader].some(value => value?.toLowerCase().includes(q))))
-      .sort(SORTS[sort].compare);
-  }, [visible, query, type, status, sort]);
-  const shelves = useMemo(() => {
-    if (!home || query.trim() || type !== 'all' || visible.length < SHELF_MIN_ITEMS) return null;
-    return {
-      recent: [...visible].sort(SORTS.newest.compare).slice(0, SHELF_SIZE),
-      popular: [...visible].filter(item => item.views > 0).sort(SORTS.popular.compare).slice(0, SHELF_SIZE),
-    };
-  }, [home, query, type, visible]);
-  const counts = useMemo(() => items.reduce((acc, item) => ({ ...acc, [item.type]: (acc[item.type] || 0) + 1 }), {}), [items]);
 
+  const browsing = home && !q && type === 'all' && !activeFilters;
+  const [shelfRows, setShelfRows] = useState(null);
+  useEffect(() => {
+    if (!home) return undefined;
+    let live = true;
+    Promise.all([api(`/content?scope=library&sort=newest&limit=${SHELF_SIZE}`), api(`/content?scope=library&sort=popular&limit=${SHELF_SIZE}`)])
+      .then(([recent, popular]) => live && setShelfRows({ recent: recent.items, popular: popular.items.filter(item => item.views > 0), total: recent.total }))
+      .catch(() => {});
+    return () => { live = false; };
+  }, [home, version]);
+  const shelves = browsing && shelfRows && shelfRows.total >= SHELF_MIN_ITEMS
+    ? { recent: withOverrides(shelfRows.recent), popular: withOverrides(shelfRows.popular) } : null;
+  const counts = list.counts;
+  const countAll = Object.values(counts).reduce((sum, value) => sum + value, 0);
   async function toggleBookmark(item) {
     try {
       const { bookmarked } = await api(`/content/${item.id}/bookmark`, { method: 'POST' });
@@ -302,13 +382,20 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
       <div className="mb-5 space-y-3">
         <div className="flex items-center gap-2">
-          <SearchBox query={query} onQuery={setQuery} pool={visible} onPick={openItem} />
+          <SearchBox query={query} onQuery={setQuery} pool={filtered} onPick={openItem} />
           {scope === 'mine' && (
             <select className="input hidden w-44 sm:block" value={status} onChange={e => setStatus(e.target.value)} aria-label="Filter by status">
               <option value="all">All statuses</option>
               {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
             </select>
           )}
+          <button type="button" onClick={() => setShowFilters(open => !open)} aria-expanded={showFilters || activeFilters > 0} aria-label="Filters" title="Filters"
+            className={cx('relative flex w-[42px] shrink-0 self-stretch items-center justify-center rounded-xl ring-1 ring-inset transition sm:w-auto sm:gap-2 sm:px-3 sm:text-sm sm:font-medium',
+              showFilters || activeFilters ? 'bg-brand-50 text-brand-700 ring-brand-200' : 'bg-white text-slate-500 ring-slate-200 hover:bg-slate-50')}>
+            <SlidersHorizontal className="h-4 w-4" />
+            <span className="hidden sm:inline">Filters</span>
+            {activeFilters > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-600 px-1 text-[10px] font-semibold text-white sm:static sm:h-5 sm:min-w-5">{activeFilters}</span>}
+          </button>
           <label className="relative flex shrink-0 self-stretch" title="Sort">
             <span className="flex w-[42px] items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-inset ring-slate-200 sm:hidden" aria-hidden="true">
               <ArrowDownWideNarrow className="h-4 w-4" />
@@ -334,6 +421,33 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
             {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
           </select>
         )}
+        {(showFilters || activeFilters > 0) && (
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-200 sm:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
+            <select className="input" value={filters.language} onChange={e => setFilters(current => ({ ...current, language: e.target.value }))} aria-label="Language">
+              <option value="">All languages</option>
+              {LANGUAGES.map(language => <option key={language}>{language}</option>)}
+            </select>
+            <select className="input" value={filters.chapter} onChange={e => setFilters(current => ({ ...current, chapter: e.target.value }))} aria-label="Gita chapter">
+              <option value="">All chapters</option>
+              {Array.from({ length: 18 }, (_, index) => String(index + 1)).map(chapter => {
+                const known = facets?.chapters.find(entry => entry.name === chapter);
+                return <option key={chapter} value={chapter}>Chapter {chapter}{known ? ` (${known.count})` : ''}</option>;
+              })}
+            </select>
+            <select className="input" value={filters.speaker} onChange={e => setFilters(current => ({ ...current, speaker: e.target.value }))} aria-label="Speaker">
+              <option value="">All speakers</option>
+              {filters.speaker && !facets?.speakers.some(entry => entry.name === filters.speaker) && <option value={filters.speaker}>{filters.speaker}</option>}
+              {facets?.speakers.map(entry => <option key={entry.name} value={entry.name}>{entry.name} ({entry.count})</option>)}
+            </select>
+            <select className="input" value={filters.topic} onChange={e => setFilters(current => ({ ...current, topic: e.target.value }))} aria-label="Topic">
+              <option value="">All topics</option>
+              {filters.topic && !facets?.topics.some(entry => entry.name.toLowerCase() === filters.topic.toLowerCase()) && <option value={filters.topic}>{filters.topic}</option>}
+              {facets?.topics.map(entry => <option key={entry.name} value={entry.name}>{entry.name} ({entry.count})</option>)}
+            </select>
+            <Button variant="ghost" size="sm" icon={X} onClick={() => { setFilters(NO_FILTERS); setShowFilters(false); }}
+              className="col-span-2 justify-self-end sm:col-span-1 sm:self-center">Clear</Button>
+          </div>
+        )}
         <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
           {['all', ...Object.keys(TYPE_META)].map(key => (
             <button key={key} type="button" onClick={() => setType(key)}
@@ -341,7 +455,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                 type === key ? 'bg-voice text-white shadow-glow' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50')}>
               {key === 'all' ? 'All' : TYPE_META[key].plural}
               <span className={cx('ml-1.5 text-xs', type === key ? 'text-white/80' : 'text-slate-400')}>
-                {key === 'all' ? items.length : counts[key] || 0}
+                {key === 'all' ? countAll : counts[key] || 0}
               </span>
             </button>
           ))}
@@ -350,11 +464,14 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
       {error && <ErrorBanner error={error} onRetry={reload} />}
       {loading && !data && <Spinner variant={layout === 'grid' ? 'grid' : 'list'} rows={8} />}
-      {data && !filtered.length && (
+      {data && !filtered.length && !loading && (
         <EmptyState
           icon={scope === 'saved' ? Bookmark : scope === 'mine' ? UploadCloud : FolderOpen}
-          title={items.length ? 'No matching content' : scope === 'saved' ? 'Nothing saved yet' : scope === 'mine' ? 'No submissions yet' : 'The library is empty'}
-          action={!items.length && scope !== 'saved' && <Button icon={UploadCloud} onClick={() => navigate('upload')}>Contribute</Button>}
+          title={q || type !== 'all' || activeFilters || status !== 'all' ? 'No matching content' : scope === 'saved' ? 'Nothing saved yet' : scope === 'mine' ? 'No submissions yet' : 'The library is empty'}
+          description={home && (q || activeFilters) ? 'Can’t find it? Ask for it and someone may upload it.' : undefined}
+          action={home && (q || activeFilters)
+            ? <Button variant="secondary" icon={MessageSquarePlus} onClick={() => navigate('requests')}>Request content</Button>
+            : !q && !activeFilters && type === 'all' && scope !== 'saved' && <Button icon={UploadCloud} onClick={() => navigate('upload')}>Contribute</Button>}
         />
       )}
 
@@ -391,6 +508,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                   {scope === 'mine' && item.status === 'rejected' && item.review_note && (
                     <p className="mt-1 line-clamp-2 text-xs text-rose-700"><span className="font-medium">Reviewer note:</span> {item.review_note}</p>
                   )}
+                  {item.snippet && <p className="mt-1 line-clamp-2 text-xs italic text-slate-500">{item.snippet}</p>}
                 </div>
                 {canShare(item) && <ShareButton item={item} onShare={share} className="shrink-0 p-2" />}
                 {item.status === 'approved' && !item.parent_id && (
@@ -414,7 +532,9 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
         </div>
       )}
 
-      <PreviewModal item={preview} onShare={share} onClose={() => setPreview(null)} user={user}
+      {list.hasMore && <div ref={sentinel} className="flex justify-center py-6">{loadingMore && <Loader2 className="h-5 w-5 animate-spin text-slate-400" aria-label="Loading more" />}</div>}
+
+      <PreviewModal item={preview} onShare={share} onClose={() => setPreview(null)} user={user} onPickTag={pickTag}
         onAddTo={target => { setPreview(null); onAddTo?.(target); }} onEdited={edited}
         actions={preview && (canDelete() ? (
           <Button variant="secondary" icon={Trash2} onClick={() => remove(preview)} className="text-rose-600">Remove</Button>

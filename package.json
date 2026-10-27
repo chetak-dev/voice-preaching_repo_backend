@@ -1,6 +1,6 @@
 {
   "name": "kalpa-taru",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,7 @@
     "server": "node server/index.js",
     "start": "node server/index.js",
     "make-admin": "node server/make-admin.js",
+    "restore-backup": "node server/restore-backup.js",
     "test": "node --test server/platform.test.js"
   },
   "dependencies": {
