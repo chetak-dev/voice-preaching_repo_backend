@@ -2,6 +2,11 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.5.5
+
+- "Kalpa Taru" now uses the classical Cinzel typeface.
+- The name and "ISKCON Brahmapur" are smaller, centred next to the logo with a small gap, and the same width as each other.
+
 ## 1.5.4
 
 - Refined the logo text: "Kalpa Taru" is a little smaller and less heavy, and "ISKCON Brahmapur" has natural letter spacing instead of stretched spacing. Both lines still match the logo's height and each other's width.
