@@ -785,7 +785,7 @@ export function createApp(overrides = {}) {
   app.post('/api/storage', siteAdmin, h(async (req, res) => {
     const name = text(req.body.name, 'Storage name', 100);
     if (!['oauth', 'service'].includes(req.body.kind)) throw fail(400, 'Choose a storage connection type.');
-    // Personal Drives get their own "VOICE Media" folder when connected; only Shared Drives need a folder up front.
+    // Personal Drives get their own "Kalpa Taru Media" folder when connected; only Shared Drives need a folder up front.
     let folderId = '';
     if (req.body.kind === 'service') {
       folderId = text(req.body.folderId, 'Folder ID', 200);

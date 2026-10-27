@@ -411,6 +411,10 @@ test('personal Drives use their own app folder, reusing it when possible', async
   assert.equal(await ensureAppFolder(fake(), ''), 'new-folder');
   assert.deepEqual(calls.at(-1), ['create', APP_FOLDER]);
   assert.ok(calls.some(([kind, q]) => kind === 'list' && q.includes(`name = '${APP_FOLDER}'`)));
+  // Drives connected before the rename keep their "VOICE Media" folder; the current name wins when both exist.
+  assert.ok(calls.some(([kind, q]) => kind === 'list' && q.includes("name = 'VOICE Media'")));
+  assert.equal(await ensureAppFolder(fake({ listed: [{ id: 'old', name: 'VOICE Media' }, { id: 'current', name: APP_FOLDER }] }), ''), 'current');
+  assert.equal(await ensureAppFolder(fake({ listed: [{ id: 'old', name: 'VOICE Media' }] }), ''), 'old');
 });
 
 test('serverless hosts refuse file uploads until a Google Drive is connected', async () => {

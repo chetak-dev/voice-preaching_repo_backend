@@ -32,7 +32,7 @@ export default function UploadTray({ inline = false }) {
     ? waiting ? 'Waiting for connection…' : `Uploading ${Math.min(done + failed.length + 1, jobs.length)} of ${jobs.length}`
     : failed.length ? `${plural(failed.length, 'upload')} failed` : `${plural(done, 'upload')} ${published ? 'published' : 'submitted for review'}`;
   const hint = active.length
-    ? 'Keep using VOICE freely. If you close it, uploads continue the next time you open it.'
+    ? 'Keep using Kalpa Taru freely. If you close it, uploads continue the next time you open it.'
     : failed.length ? 'Open the list for details, then upload those files again.'
       : published ? 'They are live in the library now.' : 'They will appear in the library after approval.';
 

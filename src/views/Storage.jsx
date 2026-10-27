@@ -111,7 +111,7 @@ export default function Storage() {
                     <dt className="text-slate-500">Folder</dt>
                     <dd className="truncate font-medium text-slate-800">
                       {node.folderId
-                        ? <a className="text-brand-700 hover:underline" href={`https://drive.google.com/drive/folders/${node.folderId}`} target="_blank" rel="noreferrer">{node.kind === 'oauth' ? 'VOICE Media' : 'Open folder'}</a>
+                        ? <a className="text-brand-700 hover:underline" href={`https://drive.google.com/drive/folders/${node.folderId}`} target="_blank" rel="noreferrer">{node.kind === 'oauth' ? 'App folder' : 'Open folder'}</a>
                         : <span className="text-slate-400">Created on connect</span>}
                     </dd>
                   </div>
@@ -194,7 +194,7 @@ export default function Storage() {
           {form.kind === 'oauth' ? (
             <p className="rounded-xl bg-brand-50/70 px-4 py-3 text-sm text-slate-600 ring-1 ring-inset ring-brand-100">
               After adding, click <strong className="text-slate-800">Connect</strong> and sign in with the Google account for this Drive.
-              VOICE creates a <strong className="text-slate-800">VOICE Media</strong> folder there and can only access the files it uploads.
+              Kalpa Taru creates a <strong className="text-slate-800">Kalpa Taru Media</strong> folder there and can only access the files it uploads.
             </p>
           ) : (
             <div>

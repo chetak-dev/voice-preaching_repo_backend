@@ -105,7 +105,7 @@ export default function Login({ config, onSignedIn }) {
             ))}
           </ul>
         </div>
-        <p className="relative mt-12 hidden text-xs text-white/50 lg:block">© {new Date().getFullYear()} VOICE</p>
+        <p className="relative mt-12 hidden text-xs text-white/50 lg:block">© {new Date().getFullYear()} Kalpa Taru</p>
       </div>
 
       {/* Form: rounded sheet on mobile, centered column on desktop */}

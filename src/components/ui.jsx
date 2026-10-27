@@ -25,7 +25,7 @@ export const STATUS_META = {
 
 export const cx = (...classes) => classes.filter(Boolean).join(' ');
 
-// The VOICE mark: a bold, two-tone "V".
+// The Kalpa Taru mark: the wish-fulfilling tree, bearing golden fruit.
 export function LogoMark({ className }) {
   const id = React.useId().replace(/:/g, '');
   return (
@@ -36,13 +36,18 @@ export function LogoMark({ className }) {
         </linearGradient>
       </defs>
       <rect width="48" height="48" rx="14" fill={`url(#${id}bg)`} />
-      <g fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="6">
-        <path d="M24 34 34 14" strokeOpacity=".7" />
-        <path d="M14 14 24 34" />
+      <path d="M15.5 40.6q8.5-3 17 0" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeOpacity=".6" />
+      <path d="M21.4 40c1-3.8 1.3-7.8 1.3-12h2.6c0 4.2.3 8.2 1.3 12z" fill="#fff" />
+      <g fill="#fff">
+        <circle cx="24" cy="16.5" r="9" /><circle cx="15.8" cy="22.4" r="6.6" /><circle cx="32.2" cy="22.4" r="6.6" /><circle cx="24" cy="24.4" r="7.6" />
       </g>
+      <path d="M24 31V17.5M24 27l-5-4.2M24 24l4.8-4" fill="none" stroke="#6d28d9" strokeWidth="1.7" strokeLinecap="round" />
+      <g fill="#f59e0b"><circle cx="24" cy="15.6" r="2.3" /><circle cx="18.2" cy="22" r="2.3" /><circle cx="29.6" cy="19.2" r="2.3" /></g>
     </svg>
   );
 }
+
+export const APP_NAME = 'Kalpa Taru';
 
 export function Logo({ size = 'md', light = false, tagline = true, textClassName }) {
   const box = size === 'lg' ? 'h-11 w-11 rounded-2xl' : size === 'sm' ? 'h-8 w-8 rounded-xl' : 'h-9 w-9 rounded-xl';
@@ -50,8 +55,8 @@ export function Logo({ size = 'md', light = false, tagline = true, textClassName
     <div className="flex items-center gap-2.5">
       <LogoMark className={cx('shrink-0 shadow-glow', box, light && 'ring-2 ring-white/30')} />
       <div className={cx('leading-none', textClassName)}>
-        <p className={cx('font-extrabold tracking-[0.18em]', size === 'lg' ? 'text-xl' : 'text-base',
-          light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>VOICE</p>
+        <p className={cx('whitespace-nowrap font-extrabold uppercase tracking-[0.12em]', size === 'lg' ? 'text-xl' : 'text-base',
+          light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
         {tagline && <p className={cx('mt-px text-[11px] font-medium', light ? 'text-white/70' : 'text-slate-500')}>Content Hub</p>}
       </div>
     </div>
@@ -162,13 +167,13 @@ function Bone({ className, style }) {
 
 export function SplashLoader() {
   return (
-    <div role="status" aria-label="Loading VOICE" className="flex min-h-screen flex-col items-center justify-center gap-6 bg-voice-soft">
+    <div role="status" aria-label={`Loading ${APP_NAME}`} className="flex min-h-screen flex-col items-center justify-center gap-6 bg-voice-soft">
       <div className="relative">
         <div className="absolute inset-0 animate-ping rounded-3xl bg-brand-400/30" />
         <LogoMark className="relative h-16 w-16 animate-breathe rounded-3xl shadow-glow" />
       </div>
       <div className="text-center">
-        <p className="bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-lg font-extrabold tracking-[0.18em] text-transparent">VOICE</p>
+        <p className="bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-lg font-extrabold uppercase tracking-[0.12em] text-transparent">{APP_NAME}</p>
         <p className="text-xs font-medium text-slate-500">Content Hub</p>
       </div>
       <div className="h-1 w-40 overflow-hidden rounded-full bg-brand-100">

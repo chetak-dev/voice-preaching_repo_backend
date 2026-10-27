@@ -1,4 +1,4 @@
-# VOICE — Moderated Content Hub
+# Kalpa Taru — Moderated Content Hub
 
 A professional content-sharing platform for communities. Members contribute **images, video, audio, documents and links**; every contribution is reviewed by an **admin** before it is published. On phones it looks and feels like an Android app (bottom navigation, floating upload button, bottom sheets) and can be installed to the home screen. Files are stored across **multiple Google Drives** with automatic routing.
 
@@ -55,19 +55,19 @@ Everyone uses the same sign-in page; what they see depends on their role.
 
 ## Using multiple Google Drives
 
-Each free Google account offers 15 GB. The platform treats every connected Drive as a **storage destination** and spreads uploads across them. Use one Google account per Drive (ideally accounts created just for VOICE storage).
+Each free Google account offers 15 GB. The platform treats every connected Drive as a **storage destination** and spreads uploads across them. Use one Google account per Drive (ideally accounts created just for Kalpa Taru storage).
 
 1. Sign in as a site admin → **Storage** → **Add Google Drive**, give it a name and keep *Personal Google account*. Every Drive accepts all file types. (You can register Drives before the Google settings below are configured; they show *Needs connection* until then.)
-2. Click **Connect** and sign in with the Google account for that Drive. VOICE creates a **VOICE Media** folder in it (or reuses its existing one) and stores a refresh token encrypted with `STORAGE_ENCRYPTION_KEY`.
+2. Click **Connect** and sign in with the Google account for that Drive. Kalpa Taru creates a **Kalpa Taru Media** folder in it (or reuses its existing one, including a **Kalpa Taru Media** folder from before the rename) and stores a refresh token encrypted with `STORAGE_ENCRYPTION_KEY`.
 3. Click **Test** to verify access and read the Drive's quota.
 
-**Limited access:** personal Drives use Google's `drive.file` permission, so VOICE can only see and manage the files it uploads, never anything else in the account. This is why no Google app verification is required. Files you add to the folder by hand are not visible to VOICE. If a connection is ever lost, click **Reconnect** with the same Google account; VOICE regains access to all of its files.
+**Limited access:** personal Drives use Google's `drive.file` permission, so Kalpa Taru can only see and manage the files it uploads, never anything else in the account. This is why no Google app verification is required. Files you add to the folder by hand are not visible to Kalpa Taru. If a connection is ever lost, click **Reconnect** with the same Google account; Kalpa Taru regains access to all of its files.
 
 **Routing:** for each upload, the server picks the *active, connected* Drive with the most free space (quota is cached for 5 minutes). When a Drive is nearly full, **Pause** it — existing files stay available, new uploads go elsewhere. If no Drive is connected, the file is stored locally on the server (`DATA_DIR/files`) — except on Vercel, where a connected Drive is required. Site admins can also choose a specific destination when uploading.
 
 **Large files:** the browser sends files in 4 MB chunks, which the server streams straight into Google Drive's resumable upload. This keeps every request within serverless limits, so there is no file size limit (only the free space on your Drives).
 
-**Background uploads:** uploads run in the background, so people can keep browsing while a progress tray shows status. Files waiting to upload are kept in the browser's storage on the device. If the tab is closed, the phone suspends it, or the connection drops, the upload continues from the last finished chunk when VOICE is opened again (within 24 hours) or the connection returns. Signing out cancels pending uploads and removes those saved files from the device.
+**Background uploads:** uploads run in the background, so people can keep browsing while a progress tray shows status. Files waiting to upload are kept in the browser's storage on the device. If the tab is closed, the phone suspends it, or the connection drops, the upload continues from the last finished chunk when Kalpa Taru is opened again (within 24 hours) or the connection returns. Signing out cancels pending uploads and removes those saved files from the device.
 
 **Workspace Shared Drives** are also supported: set `GOOGLE_APPLICATION_CREDENTIALS` to a service-account key file (or paste the key JSON into `GOOGLE_SERVICE_ACCOUNT_JSON`), add the service account as a member of the Shared Drive, and choose *Workspace Shared Drive* (with the Shared Drive folder link) when adding storage.
 
@@ -133,7 +133,7 @@ Every `git push` to `main` redeploys automatically. Sign-in only works on the `A
 5. Keep the app running with systemd: create `/etc/systemd/system/voice.service`:
    ```ini
    [Unit]
-   Description=VOICE
+   Description=Kalpa Taru
    After=network.target
 
    [Service]

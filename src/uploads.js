@@ -2,7 +2,7 @@ import { api, saveThumbnail, sendUpload, startUpload } from './api.js';
 import { makeThumbnail } from './thumbnails.js';
 
 // Uploads run here, outside any page, so they continue while the user moves around the app. Files waiting to finish
-// are also kept in IndexedDB: if the tab is closed (or the phone suspends it), they resume next time VOICE opens.
+// are also kept in IndexedDB: if the tab is closed (or the phone suspends it), they resume next time the app opens.
 const DB_NAME = 'voice-uploads';
 const STORE = 'jobs';
 const MAX_AGE_MS = 23 * 3600_000; // The server discards unfinished uploads after 24 hours.

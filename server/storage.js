@@ -58,10 +58,12 @@ export function driveClient(node, config) {
 
 // Personal Drives only grant `drive.file` (files this app creates), which needs no Google verification.
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-export const APP_FOLDER = 'VOICE Media';
+export const APP_FOLDER = 'Kalpa Taru Media';
+// Drives connected before the rename keep using their existing folder.
+const LEGACY_FOLDERS = ['VOICE Media'];
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-/** Returns the id of the app's own upload folder: the current one if still usable, else an existing or new "VOICE Media" folder. */
+/** Returns the id of the app's own upload folder: the current one if still usable, else an existing or new app folder. */
 export async function ensureAppFolder(drive, currentId) {
   if (currentId) {
     try {
@@ -71,11 +73,13 @@ export async function ensureAppFolder(drive, currentId) {
       // Not visible to this app or account any more; fall through and use a fresh folder.
     }
   }
+  const names = [APP_FOLDER, ...LEGACY_FOLDERS].map(name => `name = '${name}'`).join(' or ');
   const { data: found } = await drive.files.list({
-    q: `name = '${APP_FOLDER}' and mimeType = '${FOLDER_MIME}' and 'root' in parents and trashed = false`,
-    fields: 'files(id)', pageSize: 1, spaces: 'drive',
+    q: `(${names}) and mimeType = '${FOLDER_MIME}' and 'root' in parents and trashed = false`,
+    fields: 'files(id,name)', pageSize: 10, spaces: 'drive',
   });
-  if (found.files?.length) return found.files[0].id;
+  const existing = found.files?.find(file => file.name === APP_FOLDER) || found.files?.[0];
+  if (existing) return existing.id;
   const { data } = await drive.files.create({ requestBody: { name: APP_FOLDER, mimeType: FOLDER_MIME }, fields: 'id' });
   return data.id;
 }

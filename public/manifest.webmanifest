@@ -1,6 +1,6 @@
-﻿{
-  "name": "VOICE Content Hub",
-  "short_name": "VOICE",
+{
+  "name": "Kalpa Taru Content Hub",
+  "short_name": "Kalpa Taru",
   "description": "A moderated content hub for your community.",
   "start_url": "/",
   "display": "standalone",

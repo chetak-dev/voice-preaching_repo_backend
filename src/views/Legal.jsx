@@ -10,7 +10,7 @@ const contact = CONTACT
 
 const PRIVACY = [
   ['overview', 'Overview', <>
-    <p>VOICE Content Hub (“VOICE”, “we”, “us”) is a moderated platform where members share lectures, audio, video, documents, images and links with their community. This policy explains what information we collect, why we collect it, and the choices you have.</p>
+    <p>Kalpa Taru Content Hub (“Kalpa Taru”, “we”, “us”) is a moderated platform where members share lectures, audio, video, documents, images and links with their community. This policy explains what information we collect, why we collect it, and the choices you have.</p>
   </>],
   ['collect', 'Information we collect', <>
     <ul>
@@ -34,7 +34,7 @@ const PRIVACY = [
     <p>Everything you upload is reviewed by a site administrator before it is published. Once approved, public content is visible to other members together with your name, and anyone can open it through a share link. Private content is visible only to you and the administrators. Content that is pending or rejected is never published.</p>
   </>],
   ['providers', 'Service providers', <>
-    <p>We rely on a few trusted providers to run VOICE, and each one processes data only to provide its service:</p>
+    <p>We rely on a few trusted providers to run Kalpa Taru, and each one processes data only to provide its service:</p>
     <ul>
       <li><strong>Vercel</strong>: website hosting.</li>
       <li><strong>Turso</strong>: database for account and catalogue information.</li>
@@ -55,7 +55,7 @@ const PRIVACY = [
     <p>Data is sent over HTTPS. Passwords are hashed, storage credentials are encrypted, and files are delivered only after permission checks. No system is completely secure, so please use a strong, unique password.</p>
   </>],
   ['children', 'Children', <>
-    <p>VOICE is not intended for children under 13. If you believe a child has given us personal information, {contact} and we will remove it.</p>
+    <p>Kalpa Taru is not intended for children under 13. If you believe a child has given us personal information, {contact} and we will remove it.</p>
   </>],
   ['changes', 'Changes to this policy', <>
     <p>We may update this policy from time to time. When we do, we will change the date at the top of this page. If the changes are significant, we will let members know.</p>
@@ -64,7 +64,7 @@ const PRIVACY = [
 
 const TERMS = [
   ['acceptance', 'Acceptance of these terms', <>
-    <p>By creating an account or using VOICE Content Hub (“VOICE”), you agree to these Terms and to our <a className="font-medium text-brand-700 hover:underline" href="#/privacy">Privacy Policy</a>. If you do not agree, please do not use the service.</p>
+    <p>By creating an account or using Kalpa Taru Content Hub (“Kalpa Taru”), you agree to these Terms and to our <a className="font-medium text-brand-700 hover:underline" href="#/privacy">Privacy Policy</a>. If you do not agree, please do not use the service.</p>
   </>],
   ['accounts', 'Your account', <>
     <ul>
@@ -74,7 +74,7 @@ const TERMS = [
     </ul>
   </>],
   ['content', 'Your content', <>
-    <p>You keep ownership of everything you upload. By submitting content, you give VOICE a non-exclusive, royalty-free permission to store, copy, display and share it within the platform and through share links, for as long as it stays on VOICE.</p>
+    <p>You keep ownership of everything you upload. By submitting content, you give Kalpa Taru a non-exclusive, royalty-free permission to store, copy, display and share it within the platform and through share links, for as long as it stays on Kalpa Taru.</p>
     <p>You confirm that you own the content or have permission to share it, and that sharing it does not violate anyone else’s rights.</p>
   </>],
   ['moderation', 'Review and moderation', <>
@@ -93,19 +93,19 @@ const TERMS = [
     <p>Contribution points recognise community participation. They have no monetary value and cannot be exchanged. We may adjust them to correct errors or abuse.</p>
   </>],
   ['copyright', 'Copyright concerns', <>
-    <p>If you believe content on VOICE infringes your rights, {contact}. Include a link to the content and details of your claim. We will review the request and remove the content where appropriate.</p>
+    <p>If you believe content on Kalpa Taru infringes your rights, {contact}. Include a link to the content and details of your claim. We will review the request and remove the content where appropriate.</p>
   </>],
   ['termination', 'Suspension and termination', <>
-    <p>You may stop using VOICE at any time. We may suspend or close accounts that break these Terms or put the community at risk.</p>
+    <p>You may stop using Kalpa Taru at any time. We may suspend or close accounts that break these Terms or put the community at risk.</p>
   </>],
   ['disclaimer', 'Disclaimers', <>
-    <p>VOICE is provided “as is” and “as available”. We aim to keep it running and your files safe, but we cannot guarantee uninterrupted service, and we are not responsible for content posted by members. Please keep your own copies of important files.</p>
+    <p>Kalpa Taru is provided “as is” and “as available”. We aim to keep it running and your files safe, but we cannot guarantee uninterrupted service, and we are not responsible for content posted by members. Please keep your own copies of important files.</p>
   </>],
   ['liability', 'Limitation of liability', <>
-    <p>To the extent the law allows, VOICE and its administrators are not liable for any indirect, incidental or consequential loss, or for any loss of data, that arises from your use of the service.</p>
+    <p>To the extent the law allows, Kalpa Taru and its administrators are not liable for any indirect, incidental or consequential loss, or for any loss of data, that arises from your use of the service.</p>
   </>],
   ['changes', 'Changes to these terms', <>
-    <p>We may update these Terms from time to time. If you continue to use VOICE after an update, you accept the new Terms. If the changes are significant, we will let members know.</p>
+    <p>We may update these Terms from time to time. If you continue to use Kalpa Taru after an update, you accept the new Terms. If the changes are significant, we will let members know.</p>
   </>],
   ['contact', 'Contact', <>
     <p>Questions about these Terms? Please {contact}.</p>
@@ -120,14 +120,14 @@ const PAGES = {
 export default function Legal({ page, signedIn }) {
   const { title, icon: Icon, sections } = PAGES[page];
   const other = page === 'privacy' ? 'terms' : 'privacy';
-  useEffect(() => { window.scrollTo(0, 0); document.title = `${title} | VOICE`; return () => { document.title = 'VOICE | Content Hub'; }; }, [title]);
+  useEffect(() => { window.scrollTo(0, 0); document.title = `${title} | Kalpa Taru`; return () => { document.title = 'Kalpa Taru | Content Hub'; }; }, [title]);
   const jump = id => event => { event.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="pt-safe sticky top-0 z-30 bg-voice text-white shadow-md">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4 sm:px-6">
-          <a href="#/" aria-label="VOICE home"><Logo size="sm" light /></a>
+          <a href="#/" aria-label="Kalpa Taru home"><Logo size="sm" light /></a>
           <div className="flex-1" />
           <a href={signedIn ? '#/library' : '#/signin'}
             className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-sm font-semibold ring-1 ring-white/25 transition hover:bg-white/25">
