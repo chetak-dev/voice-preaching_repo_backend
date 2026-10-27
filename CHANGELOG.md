@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.1
+
+- Removed the Filters button from the library. Tapping a tag in a preview still filters the library, with a Clear button.
+
 ## 1.7.0
 
 - Tags: language, speaker, Gita verses and topics on uploads and in **Edit**; verses in titles are detected automatically.

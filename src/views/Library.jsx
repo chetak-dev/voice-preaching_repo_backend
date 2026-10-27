@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Loader2, MessageSquarePlus, Search, SlidersHorizontal, Trash2, TrendingUp, Undo2, UploadCloud, User, X } from 'lucide-react';
+import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Loader2, MessageSquarePlus, Search, Trash2, TrendingUp, Undo2, UploadCloud, User, X } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
 import { useMediaPlayer } from '../components/MediaPlayer.jsx';
@@ -188,7 +188,6 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   });
   const [status, setStatus] = useState('all');
   const [filters, setFilters] = useState(NO_FILTERS);
-  const [showFilters, setShowFilters] = useState(false);
   const activeFilters = FILTER_KEYS.filter(key => filters[key]).length;
   const facets = useFacets();
   const [layout, setLayout] = useState('grid');
@@ -198,7 +197,6 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   const [overrides, setOverrides] = useState({});
   const pickTag = (key, value) => {
     setFilters(current => ({ ...current, [key]: String(value) }));
-    setShowFilters(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -389,13 +387,6 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
               {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
             </select>
           )}
-          <button type="button" onClick={() => setShowFilters(open => !open)} aria-expanded={showFilters || activeFilters > 0} aria-label="Filters" title="Filters"
-            className={cx('relative flex w-[42px] shrink-0 self-stretch items-center justify-center rounded-xl ring-1 ring-inset transition sm:w-auto sm:gap-2 sm:px-3 sm:text-sm sm:font-medium',
-              showFilters || activeFilters ? 'bg-brand-50 text-brand-700 ring-brand-200' : 'bg-white text-slate-500 ring-slate-200 hover:bg-slate-50')}>
-            <SlidersHorizontal className="h-4 w-4" />
-            <span className="hidden sm:inline">Filters</span>
-            {activeFilters > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-600 px-1 text-[10px] font-semibold text-white sm:static sm:h-5 sm:min-w-5">{activeFilters}</span>}
-          </button>
           <label className="relative flex shrink-0 self-stretch" title="Sort">
             <span className="flex w-[42px] items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-inset ring-slate-200 sm:hidden" aria-hidden="true">
               <ArrowDownWideNarrow className="h-4 w-4" />
@@ -421,7 +412,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
             {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
           </select>
         )}
-        {(showFilters || activeFilters > 0) && (
+        {activeFilters > 0 && (
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-200 sm:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
             <select className="input" value={filters.language} onChange={e => setFilters(current => ({ ...current, language: e.target.value }))} aria-label="Language">
               <option value="">All languages</option>
@@ -444,7 +435,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
               {filters.topic && !facets?.topics.some(entry => entry.name.toLowerCase() === filters.topic.toLowerCase()) && <option value={filters.topic}>{filters.topic}</option>}
               {facets?.topics.map(entry => <option key={entry.name} value={entry.name}>{entry.name} ({entry.count})</option>)}
             </select>
-            <Button variant="ghost" size="sm" icon={X} onClick={() => { setFilters(NO_FILTERS); setShowFilters(false); }}
+            <Button variant="ghost" size="sm" icon={X} onClick={() => setFilters(NO_FILTERS)}
               className="col-span-2 justify-self-end sm:col-span-1 sm:self-center">Clear</Button>
           </div>
         )}
