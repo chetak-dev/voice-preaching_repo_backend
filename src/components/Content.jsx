@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bookmark, Download, ExternalLink, Eye, Layers, Play, Plus, Share2 } from 'lucide-react';
+import { Bookmark, Check, Download, ExternalLink, Eye, Layers, Pencil, Play, Plus, Share2 } from 'lucide-react';
 import { api, fileUrl, thumbnailUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
 import FullPreview from './FullPreview.jsx';
@@ -9,11 +9,9 @@ const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, '')
 
 export const canShare = item => item.status === 'approved' && item.visibility !== 'private' && !item.parent_id;
 
+// /s/<id> serves a link preview (title + thumbnail) to chat apps, then redirects into the app.
 export function contentLink(item) {
-  const url = new URL('/', window.location.origin);
-  url.searchParams.set('content', item.id);
-  url.hash = '/library';
-  return url.toString();
+  return new URL(`/s/${encodeURIComponent(item.id)}`, window.location.origin).toString();
 }
 
 /** Opens the native share sheet when available, otherwise copies the link. Returns 'shared', 'copied' or null. */
@@ -89,10 +87,13 @@ export function ContentThumb({ item, className }) {
   );
 }
 
-export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, footer }) {
+export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, footer, className }) {
   const meta = TYPE_META[item.type] || TYPE_META.link;
+  const { openPlayer } = useMediaPlayer();
+  const playable = (item.type === 'audio' || item.type === 'video') && item.status !== 'rejected';
   return (
-    <article className="card group flex flex-col overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:shadow-pop">
+    <article className={cx('card group flex flex-col overflow-hidden transition duration-200 hover:-translate-y-0.5 hover:shadow-pop', className)}>
+      <div className="relative">
       <button type="button" onClick={() => onPreview(item)} className="relative block aspect-[16/10] w-full overflow-hidden" aria-label={`Preview ${item.title}`}>
         <ContentThumb item={item} className="h-full w-full transition duration-300 group-hover:scale-[1.03]" />
         <span className="absolute left-1.5 top-1.5 sm:left-2 sm:top-2"><Badge tone={cx(meta.tone, 'bg-white/90 px-1.5 py-0.5 text-[10px] backdrop-blur [&_svg]:h-3 [&_svg]:w-3')} icon={meta.icon}><span>{meta.label}</span></Badge></span>
@@ -102,6 +103,13 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
           </span>
         )}
       </button>
+      {playable && (
+        <button type="button" onClick={() => openPlayer(item)} aria-label={`Play ${item.title} while browsing`} title="Play while browsing"
+          className="absolute bottom-1.5 left-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-white/95 text-brand-700 shadow-md ring-1 ring-black/5 transition hover:scale-105 active:scale-95 sm:bottom-2 sm:left-2">
+          <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
+        </button>
+      )}
+      </div>
       <div className="flex flex-1 flex-col p-2 sm:p-3">
         {item.parent_title && <p className="mb-0.5 truncate text-[11px] font-medium text-brand-700">Added to: {item.parent_title}</p>}
         <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
@@ -194,9 +202,52 @@ function UploadParts({ item, user, onAddTo }) {
 
 const MIME_INLINE = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'application/pdf': 1, 'text/plain': 1 };
 
-export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo }) {
+export function EditContentModal({ item, onClose, onSaved }) {
+  const [title, setTitle] = useState(item?.title || '');
+  const [description, setDescription] = useState(item?.description || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { setTitle(item?.title || ''); setDescription(item?.description || ''); setError(''); }, [item?.id]);
+  async function submit(event) {
+    event.preventDefault();
+    if (!title.trim() || busy) return;
+    setBusy(true); setError('');
+    try {
+      const saved = await api(`/content/${item.id}`, { method: 'PATCH', body: { title: title.trim(), description: description.trim() } });
+      onSaved({ title: saved.title, description: saved.description });
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal open={Boolean(item)} onClose={busy ? () => {} : onClose} size="sm" title="Edit details"
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button type="submit" form="edit-content-form" icon={Check} loading={busy} disabled={!title.trim()}>Save</Button>
+        </>
+      )}>
+      <form id="edit-content-form" onSubmit={submit} className="space-y-4">
+        <label className="block">
+          <span className="label">Title</span>
+          <input className="input" value={title} onChange={e => setTitle(e.target.value)} maxLength={160} autoFocus required />
+        </label>
+        <label className="block">
+          <span className="label">Description</span>
+          <textarea className="input min-h-[96px]" value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} placeholder="Optional" />
+        </label>
+        {error && <p className="text-sm text-rose-600">{error}</p>}
+      </form>
+    </Modal>
+  );
+}
+
+export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, onEdited }) {
   const { openPlayer } = useMediaPlayer();
+  const [editing, setEditing] = useState(null);
   if (!item) return null;
+  const canEdit = onEdited && ['site_admin', 'org_admin'].includes(user?.role);
+  if (canEdit && editing) {
+    return <EditContentModal item={editing} onClose={() => setEditing(null)} onSaved={changes => { setEditing(null); onEdited(item, changes); }} />;
+  }
   const meta = TYPE_META[item.type] || TYPE_META.link;
   const isMedia = item.type === 'audio' || item.type === 'video';
   return (
@@ -204,6 +255,7 @@ export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo })
       <>
         {onShare && canShare(item) && <Button variant="secondary" icon={Share2} onClick={() => onShare(item)}>Share</Button>}
         {isMedia && <Button variant="secondary" icon={Play} onClick={() => { openPlayer(item); onClose(); }}>Keep playing while browsing</Button>}
+        {canEdit && <Button variant="secondary" icon={Pencil} onClick={() => setEditing(item)}>Edit</Button>}
         {actions}
         {item.type === 'link' ? <Button href={item.url} target="_blank" rel="noopener noreferrer" icon={ExternalLink}>Open link</Button>
           : <Button href={fileUrl(item.id)} icon={Download}>Download</Button>}
@@ -220,6 +272,7 @@ export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo })
       {item.description && <p className="mt-4 whitespace-pre-line text-sm text-slate-600">{item.description}</p>}
       {item.parent_title && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900">Added to the upload <span className="font-semibold">“{item.parent_title}”</span></p>}
       {!item.parent_id && item.status !== 'rejected' && <UploadParts item={item} user={user} onAddTo={onAddTo} />}
+
     </Modal>
   );
 }

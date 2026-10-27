@@ -8,7 +8,24 @@ import { youtubeId } from '../components/Content.jsx';
 import { Button, PageHeader, TYPE_META, cx, formatBytes, useToast } from '../components/ui.jsx';
 
 const fileTypeOf = file => ['image', 'video', 'audio'].find(type => file.type.startsWith(`${type}/`)) || 'doc';
-const titleFromName = name => name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim().slice(0, 160);
+// Turns camera/download names like "update_objects-2408346d-...-20261024_003342.pdf" into a readable "Update Objects".
+const JUNK_TOKEN = /^(img|vid|aud|pxl|dsc|dcim|wa\d+|\d{6,}|(?=[a-z]*\d)[0-9a-f]{12,}|copy)$/i;
+export function titleFromName(name) {
+  const base = name.replace(/\.[a-z0-9]{1,5}$/i, '');
+  const cleaned = base
+    .replace(/[0-9a-f]{8}(-?[0-9a-f]{4}){3}-?[0-9a-f]{12}/gi, ' ')
+    .replace(/(?<![a-z0-9])\d{4}[-_.]\d{2}[-_.]\d{2}(?![a-z0-9])/gi, ' ')
+    .replace(/(?<![a-z0-9])at[\s_]+\d{1,2}[.:]\d{2}([.:]\d{2})?([\s_]*[ap]m)?(?![a-z0-9])/gi, ' ')
+    .replace(/(?<![a-z0-9])\d{1,2}:\d{2}(:\d{2})?([\s_]*[ap]m)?(?![a-z0-9])/gi, ' ')
+    .replace(/\s*\(\d+\)\s*$/, '')
+    .replace(/(?<!\d)\.|\.(?!\d)/g, ' ')
+    .replace(/[_+\-]+/g, ' ')
+    .split(/\s+/)
+    .filter(token => token && !JUNK_TOKEN.test(token))
+    .map(word => (/^[a-z]/.test(word) && word === word.toLowerCase() ? word[0].toUpperCase() + word.slice(1) : word))
+    .join(' ');
+  return (cleaned || base.replace(/[_-]+/g, ' ').trim() || 'Untitled').slice(0, 160);
+}
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 let nextKey = 0;
 

@@ -57,6 +57,7 @@ function QuotaBar({ usage, limit }) {
       <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
         <div className={cx('h-full rounded-full', percent > 90 ? 'bg-rose-500' : percent > 75 ? 'bg-amber-500' : 'bg-emerald-500')} style={{ width: `${percent}%` }} />
       </div>
+      {percent >= 90 && <p className="mt-1.5 text-xs font-medium text-rose-600">Nearly full. New uploads will go to other Drives; connect another Drive soon.</p>}
     </div>
   );
 }

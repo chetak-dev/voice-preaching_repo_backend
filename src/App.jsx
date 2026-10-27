@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import {
-  Bookmark, ClipboardCheck, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, PieChart, Plus, Trophy, UploadCloud, Users,
+  Bookmark, ClipboardCheck, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, PieChart, Plus, Share, Trophy, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
+import { promptInstall, useInstallState } from './pwa.js';
 import {
   cancelAll as cancelUploads, getJobs as getUploadJobs, isActive as isUploadActive, resumeSaved, subscribe as subscribeUploads,
 } from './uploads.js';
@@ -71,6 +72,14 @@ function Shell({ user, config, onSignOut }) {
   const [pending, setPending] = useState(0);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const installState = useInstallState();
+  const [iosHelp, setIosHelp] = useState(false);
+  async function install() {
+    setSheetOpen(false);
+    if (installState === 'ios') { setIosHelp(true); return; }
+    if (await promptInstall()) toast('Kalpa Taru is being installed.');
+  }
+  const canInstall = installState === 'prompt' || installState === 'ios';
   const askSignOut = () => { setSheetOpen(false); setConfirmSignOut(true); };
   const closeSignOut = useCallback(() => setConfirmSignOut(false), []);
   async function doSignOut() {
@@ -190,7 +199,14 @@ function Shell({ user, config, onSignOut }) {
             </div>
           </div>
         </div>
-        <div className="relative w-72 px-3 pb-3">
+        <div className="relative w-72 space-y-1.5 px-3 pb-3">
+          {canInstall && (
+            <button type="button" onClick={install} title="Install app"
+              className="flex w-14 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-[width,background-color] duration-200 hover:bg-white/10 hover:text-white group-hover/side:w-full group-focus-within/side:w-full">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white"><Download className="h-4 w-4" /></span>
+              <span className={cx('whitespace-nowrap', reveal)}>Install app</span>
+            </button>
+          )}
           <button type="button" onClick={askSignOut} title="Sign out"
             className="flex w-14 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-rose-200 ring-1 ring-inset ring-rose-400/30 transition-[width,background-color] duration-200 hover:bg-rose-500/15 hover:text-white group-hover/side:w-full group-focus-within/side:w-full">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300"><LogOut className="h-4 w-4" /></span>
@@ -287,7 +303,8 @@ function Shell({ user, config, onSignOut }) {
                 })}
               </div>
             )}
-            <div className="border-t border-slate-100 p-4">
+            <div className="space-y-2 border-t border-slate-100 p-4">
+              {canInstall && <Button variant="secondary" icon={Download} onClick={install} className="w-full justify-center">Install app</Button>}
               <Button variant="danger" icon={LogOut} onClick={askSignOut} className="w-full justify-center">Sign out</Button>
               <MadeWithLove className="pt-4 text-xs text-slate-500" />
               <p className="flex justify-center gap-2 px-3 pt-1.5 text-[11px] text-slate-400">
@@ -299,6 +316,15 @@ function Shell({ user, config, onSignOut }) {
           </div>
         </div>
       )}
+
+      <Modal open={iosHelp} onClose={() => setIosHelp(false)} size="sm" title="Install Kalpa Taru"
+        footer={<Button onClick={() => setIosHelp(false)}>Got it</Button>}>
+        <ol className="list-decimal space-y-2 pl-5 text-sm text-slate-600">
+          <li>Tap the <Share className="inline h-4 w-4 align-text-bottom text-brand-600" /> <span className="font-medium">Share</span> button in Safari.</li>
+          <li>Choose <span className="font-medium">Add to Home Screen</span>.</li>
+          <li>Tap <span className="font-medium">Add</span>. Kalpa Taru opens like an app from your home screen.</li>
+        </ol>
+      </Modal>
 
       <Modal open={confirmSignOut} onClose={closeSignOut} size="sm" title="Sign out?"
         footer={(

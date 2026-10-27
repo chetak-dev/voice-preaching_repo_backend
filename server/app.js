@@ -310,6 +310,44 @@ export function createApp(overrides = {}) {
     }
   }));
 
+  // Shared links (/s/:id) give chat apps a title and thumbnail to preview, then send people into the app.
+  // Only approved public uploads reveal anything; viewing the content itself still requires signing in.
+  const shareLimiter = rateLimit({ windowMs: 60_000, limit: 120, legacyHeaders: false });
+  const sharedItem = async id => {
+    await db.ready;
+    if (typeof id !== 'string' || id.length > 80) return null;
+    return db.get(`SELECT c.id, c.title, c.description, c.type, EXISTS(SELECT 1 FROM thumbnails t WHERE t.content_id = c.id) AS has_thumb
+      FROM content c WHERE c.id = ? AND c.status = 'approved' AND c.visibility = 'public' AND c.parent_id IS NULL`, id);
+  };
+  const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+  app.get(['/s/:id', '/api/share/:id'], shareLimiter, h(async (req, res) => {
+    const item = await sharedItem(req.params.id);
+    const target = item ? `/?content=${encodeURIComponent(item.id)}#/library` : '/';
+    const title = item ? item.title : 'Kalpa Taru';
+    const description = (item?.description || 'Gita preaching content shared on Kalpa Taru by ISKCON Brahmapur.').slice(0, 200);
+    const image = item?.has_thumb ? `${config.origin}/api/share/${encodeURIComponent(item.id)}/image` : `${config.origin}/icon-512.png`;
+    res.set('Cache-Control', 'public, max-age=300');
+    res.type('html').send(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>${escapeHtml(item ? `${title} · Kalpa Taru` : title)}</title>
+<meta name="description" content="${escapeHtml(description)}">
+<meta property="og:site_name" content="Kalpa Taru">
+<meta property="og:type" content="website">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+<meta property="og:image" content="${escapeHtml(image)}">
+<meta property="og:url" content="${escapeHtml(`${config.origin}/s/${item ? encodeURIComponent(item.id) : ''}`)}">
+<meta name="twitter:card" content="${item?.has_thumb ? 'summary_large_image' : 'summary'}">
+<meta http-equiv="refresh" content="0;url=${escapeHtml(target)}">
+</head><body><p><a href="${escapeHtml(target)}">Open ${escapeHtml(title)} on Kalpa Taru</a></p></body></html>`);
+  }));
+  app.get('/api/share/:id/image', shareLimiter, h(async (req, res) => {
+    const item = await sharedItem(req.params.id);
+    const thumb = item?.has_thumb && await db.get('SELECT mime, data FROM thumbnails WHERE content_id = ?', item.id);
+    if (!thumb) throw fail(404, 'No preview image.');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.type(thumb.mime).send(Buffer.from(thumb.data));
+  }));
+
   app.use('/api', authenticated);
   const contentQuery = `SELECT c.*, u.name AS uploader, r.name AS reviewer, p.title AS parent_title,
     EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked,
@@ -387,6 +425,9 @@ export function createApp(overrides = {}) {
       used: measured.length ? measured.reduce((sum, node) => sum + Number(node.quota_usage || 0), 0) : null,
       total: measured.length ? measured.reduce((sum, node) => sum + Number(node.quota_limit), 0) : null,
       content: Number(stored.bytes),
+      // Uploads already skip full Drives; this tells admins when one is close so they can add more storage in time.
+      nearlyFull: measured.filter(node => Number(node.quota_limit) > 0 && Number(node.quota_usage || 0) / Number(node.quota_limit) >= 0.9)
+        .map(node => ({ name: node.name, percent: Math.min(100, Math.round(Number(node.quota_usage || 0) / Number(node.quota_limit) * 100)) })),
     };
     res.json({ approved, contributions, pending, members, types, storage });
   }));
@@ -632,6 +673,43 @@ export function createApp(overrides = {}) {
     }
     res.json({ approved, skipped });
   }));
+  app.post('/api/review/bulk-reject', reviewers, h(async (req, res) => {
+    const ids = req.body.ids;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 25
+      || ids.some(id => typeof id !== 'string' || !id.trim() || id.length > 80)
+      || new Set(ids).size !== ids.length) throw fail(400, 'Select between 1 and 25 unique submission IDs.');
+    const note = text(req.body.note, 'Rejection reason', 1000, 5);
+    let rejected = 0;
+    let skipped = 0;
+    for (const id of ids) {
+      const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, id);
+      if (!item || item.status !== 'pending' || (req.user.role === 'org_admin' && item.uploader_id === req.user.id)) { skipped += 1; continue; }
+      const now = new Date().toISOString();
+      const result = await db.run(`UPDATE content SET status = 'rejected', reviewed_by = ?, review_note = ?, reviewed_at = ?
+        WHERE id = ? AND status = 'pending'
+          AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
+      req.user.id, note, now, item.id, Date.now());
+      if (!result.changes) { skipped += 1; continue; }
+      if (!item.parent_id) {
+        await db.run(`UPDATE content SET status = 'rejected', reviewed_by = ?, review_note = ?, reviewed_at = ?
+          WHERE parent_id = ? AND status = 'pending'`, req.user.id, note, now, item.id);
+      }
+      await audit(db, req.user.id, 'Rejected content', item.title);
+      rejected += 1;
+    }
+    res.json({ rejected, skipped });
+  }));
+
+  app.patch('/api/content/:id', reviewers, h(async (req, res) => {
+    const { item } = await getContent(req);
+    const title = req.body.title === undefined ? item.title : text(req.body.title, 'Title');
+    const description = req.body.description === undefined ? item.description || '' : text(req.body.description, 'Description', 2000, 0);
+    const changed = await db.run(`UPDATE content SET title = ?, description = ? WHERE id = ?
+      AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`, title, description, item.id, Date.now());
+    if (!changed.changes) throw fail(409, 'This content is being changed or is no longer available.');
+    await audit(db, req.user.id, 'Edited content', item.title === title ? title : `${item.title} → ${title}`);
+    res.json({ ok: true, title, description });
+  }));
 
   app.patch('/api/content/:id/visibility', h(async (req, res) => {
     const { item } = await getContent(req);
@@ -668,11 +746,24 @@ export function createApp(overrides = {}) {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (reason.length < 5) throw fail(400, 'Write a reason (at least 5 characters) before removing content.');
     if (reason.length > 500) throw fail(400, 'Keep the reason under 500 characters.');
-
+    await removeContent(item);
+    await audit(db, req.user.id, 'Deleted content', `${item.title} — Reason: ${reason}`);
+    res.json({ ok: true });
+  }));
+  // Contributors can take back their own submission while it is still waiting for review.
+  app.post('/api/content/:id/withdraw', h(async (req, res) => {
+    const { item } = await getContent(req);
+    if (item.uploader_id !== req.user.id) throw fail(403, 'You can only withdraw your own submissions.');
+    if (item.status !== 'pending') throw fail(409, 'Only submissions that are still waiting for review can be withdrawn.');
+    await removeContent(item, "AND status = 'pending'");
+    await audit(db, req.user.id, 'Withdrew submission', item.title);
+    res.json({ ok: true });
+  }));
+  async function removeContent(item, condition = '') {
     const token = randomUUID();
     const now = Date.now();
     const claim = await db.run(`UPDATE content SET deletion_token = ?, deletion_lock_expires = ?
-      WHERE id = ? AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
+      WHERE id = ? ${condition} AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
     token, now + 5 * 60_000, item.id, now);
     if (!claim.changes) throw fail(409, 'This content is already being removed or its status changed. Refresh and try again.');
 
@@ -701,9 +792,7 @@ export function createApp(overrides = {}) {
     await db.run('DELETE FROM thumbnails WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);
     if (!deleted.changes) throw fail(409, 'The content changed while it was being removed. Refresh and try again.');
-    await audit(db, req.user.id, 'Deleted content', `${item.title} — Reason: ${reason}`);
-    res.json({ ok: true });
-  }));
+  }
   // Thumbnails are generated in the uploader's browser (a frame, first page or cover) and stored as small images.
   const THUMB_TYPES = {
     'image/jpeg': bytes => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,

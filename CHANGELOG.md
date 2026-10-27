@@ -2,6 +2,20 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.6.0
+
+- Library sorting (Newest, Most viewed, A–Z, Oldest), remembered per device.
+- "Recently added" and "Most viewed" rows on the library home once there are 8+ items.
+- Bulk reject in the review queue (one shared note for all selected items).
+- Admins can edit an item's title and description from its preview.
+- Contributors can withdraw their own pending submissions.
+- New media player: play button on audio/video cards, custom seek bar, ±15s skip, speed, minimise, and lock-screen / headphone controls.
+- Cleaner automatic titles from file names (dates, IDs, IMG/VID/WA prefixes and "(1)" are removed; verse references are kept).
+- Installable app (PWA) with an **Install app** button and iPhone instructions.
+- Share links (`/s/<id>`) show a rich preview (title, description, thumbnail) in WhatsApp and other apps. Only approved public items are revealed.
+- Admin alerts when a Google Drive is 90% full or more.
+- Removed leftover "VOICE"/"content hub" wording.
+
 ## 1.5.6
 
 - "Kalpa Taru" now uses the Poppins font (replacing Cinzel).

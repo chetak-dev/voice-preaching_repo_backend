@@ -42,6 +42,18 @@ export default function Review({ user, onChanged }) {
     } catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
   }
 
+  async function rejectSelected(reason) {
+    if (!selected.length || busy) return;
+    setBusy('bulk-reject');
+    try {
+      const result = await api('/review/bulk-reject', { method: 'POST', body: { ids: selected, note: reason } });
+      setSelected([]); setRejecting(null); setNote('');
+      toast(`Rejected ${result.rejected}${result.skipped ? `; skipped ${result.skipped} changed or ineligible submission${result.skipped === 1 ? '' : 's'}` : ''}.`);
+      await reload();
+      onChanged?.();
+    } catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
+  }
+
   const items = data?.items || [];
   const isOwn = item => user.role === 'org_admin' && item.uploader_id === user.id;
   const reviewable = useMemo(() => items.filter(item => !isOwn(item)), [items, user.id, user.role]);
@@ -75,9 +87,15 @@ export default function Review({ user, onChanged }) {
               <input className="input pl-9" value={query} onChange={event => setQuery(event.target.value)}
                 placeholder="Search" aria-label="Search review queue" />
             </div>
-            <Button variant="success" icon={Check} loading={busy === 'bulk'} disabled={!selected.length || Boolean(busy)} onClick={approveSelected}>
-              Approve {selected.length} selected
-            </Button>
+            <div className="grid grid-cols-2 gap-2 sm:flex">
+              <Button variant="secondary" icon={X} className="text-rose-600" disabled={!selected.length || Boolean(busy)}
+                onClick={() => { setRejecting({ bulk: true }); setNote(''); }}>
+                Reject {selected.length || ''}
+              </Button>
+              <Button variant="success" icon={Check} loading={busy === 'bulk'} disabled={!selected.length || Boolean(busy)} onClick={approveSelected}>
+                Approve {selected.length || ''}
+              </Button>
+            </div>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
             <span>{items.length} pending · {reviewable.length} eligible · showing {filtered.length}</span>
@@ -134,6 +152,7 @@ export default function Review({ user, onChanged }) {
       )}
 
       <PreviewModal item={preview} onClose={() => setPreview(null)} user={user}
+        onEdited={(item, changes) => { setPreview(current => (current?.id === item.id ? { ...current, ...changes } : current)); toast('Details updated.'); reload(); }}
         actions={preview && !isOwn(preview) && (
           <>
             <Button variant="secondary" icon={X} className="text-rose-600" onClick={() => { setRejecting(preview); setPreview(null); }}>Reject</Button>
@@ -141,13 +160,16 @@ export default function Review({ user, onChanged }) {
           </>
         )} />
 
-      <Modal open={Boolean(rejecting)} onClose={() => setRejecting(null)} size="sm" title="Reject submission"
+      <Modal open={Boolean(rejecting)} onClose={() => setRejecting(null)} size="sm"
+        title={rejecting?.bulk ? `Reject ${selected.length} submission${selected.length === 1 ? '' : 's'}` : 'Reject submission'}
         footer={(
           <>
             <Button variant="secondary" onClick={() => setRejecting(null)}>Cancel</Button>
-            <Button variant="danger" disabled={note.trim().length < 5} loading={busy === rejecting?.id} onClick={() => decide(rejecting, 'rejected', note)}>Reject</Button>
+            <Button variant="danger" disabled={note.trim().length < 5} loading={rejecting?.bulk ? busy === 'bulk-reject' : busy === rejecting?.id}
+              onClick={() => (rejecting?.bulk ? rejectSelected(note) : decide(rejecting, 'rejected', note))}>Reject</Button>
           </>
         )}>
+        {rejecting?.bulk && <p className="mb-3 text-sm text-slate-600">Every contributor will see this reason.</p>}
         <label className="label" htmlFor="note">Reason</label>
         <textarea id="note" rows={4} className="input" maxLength={1000} autoFocus value={note} onChange={event => setNote(event.target.value)} />
       </Modal>

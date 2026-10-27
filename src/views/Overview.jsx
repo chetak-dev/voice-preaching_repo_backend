@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRight, HardDrive } from 'lucide-react';
+import { AlertTriangle, ArrowRight, HardDrive } from 'lucide-react';
 import { api } from '../api.js';
 import { ErrorBanner, PageHeader, Spinner, TYPE_META, cx, formatBytes, useAsync } from '../components/ui.jsx';
 
@@ -64,6 +64,18 @@ export default function Overview({ navigate }) {
       {loading && !data && <Spinner />}
       {data?.types && (
         <div className="space-y-6">
+          {data.storage?.nearlyFull?.length > 0 && (
+            <div role="alert" className="flex items-start gap-3 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+              <div className="min-w-0">
+                <p className="font-semibold">Storage is running low</p>
+                <p className="mt-0.5 text-amber-800">
+                  {data.storage.nearlyFull.map(node => `${node.name} (${node.percent}% used)`).join(', ')}.
+                  {' '}New uploads automatically go to the Drive with the most free space. Connect another Drive under Storage before all of them fill up.
+                </p>
+              </div>
+            </div>
+          )}
           {data.storage && <StorageCard storage={data.storage} />}
           <section aria-label="Library by type">
             <h2 className="mb-3 text-sm font-semibold text-slate-700">Published content by type</h2>

@@ -607,3 +607,83 @@ test('thumbnails are validated images that only the uploader or an admin can set
   assert.equal((await admin(`/api/content/${item.id}`, { method: 'DELETE', body: REASON })).status, 200);
   assert.equal((await app.locals.db.get('SELECT count(*) AS n FROM thumbnails WHERE content_id = ?', item.id)).n, 0);
 });
+
+test('bulk reject needs a reason, rejects pending items and skips the rest', async () => {
+  const user = await signIn('user');
+  const orgAdmin = await signIn('org_admin');
+  const first = (await user('/api/content', { method: 'POST', body: { title: 'Reject one', url: 'https://example.org/rj-one' } })).json;
+  const second = (await user('/api/content', { method: 'POST', body: { title: 'Reject two', url: 'https://example.org/rj-two' } })).json;
+  const own = (await orgAdmin('/api/content', { method: 'POST', body: { title: 'Already live', url: 'https://example.org/rj-own' } })).json;
+  assert.equal((await user('/api/review/bulk-reject', { method: 'POST', body: { ids: [first.id], note: 'Not suitable' } })).status, 403);
+  assert.equal((await orgAdmin('/api/review/bulk-reject', { method: 'POST', body: { ids: [first.id] } })).status, 400, 'a reason is required');
+  const result = await orgAdmin('/api/review/bulk-reject', { method: 'POST', body: { ids: [first.id, second.id, own.id], note: 'Duplicate content' } });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.json, { rejected: 2, skipped: 1 });
+  const mine = (await user('/api/content?scope=mine')).json.items;
+  for (const id of [first.id, second.id]) {
+    const row = mine.find(item => item.id === id);
+    assert.equal(row.status, 'rejected');
+    assert.equal(row.review_note, 'Duplicate content');
+  }
+});
+
+test('admins can edit titles and descriptions; members cannot', async () => {
+  const user = await signIn('user');
+  const orgAdmin = await signIn('org_admin');
+  const { json } = await user('/api/content', { method: 'POST', body: { title: 'IMG 2024 typo', url: 'https://example.org/edit' } });
+  assert.equal((await user(`/api/content/${json.id}`, { method: 'PATCH', body: { title: 'Mine now' } })).status, 403);
+  assert.equal((await orgAdmin(`/api/content/${json.id}`, { method: 'PATCH', body: { title: '' } })).status, 400);
+  const edited = await orgAdmin(`/api/content/${json.id}`, { method: 'PATCH', body: { title: 'Bhagavad Gita 2.13', description: 'Class notes' } });
+  assert.equal(edited.status, 200);
+  const row = (await user('/api/content?scope=mine')).json.items.find(item => item.id === json.id);
+  assert.equal(row.title, 'Bhagavad Gita 2.13');
+  assert.equal(row.description, 'Class notes');
+  assert.ok(JSON.stringify((await (await signIn('site_admin'))('/api/audit')).json).includes('Edited content'));
+});
+
+test('contributors can withdraw only their own pending submissions', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const admin = await signIn('site_admin');
+  const pending = (await user('/api/content', { method: 'POST', body: { title: 'Change of mind', url: 'https://example.org/wd' } })).json;
+  assert.equal((await viewer(`/api/content/${pending.id}/withdraw`, { method: 'POST' })).status, 404, 'others cannot even see it');
+  assert.equal((await admin(`/api/content/${pending.id}/withdraw`, { method: 'POST' })).status, 403, 'admins remove with a reason instead');
+  assert.equal((await user(`/api/content/${pending.id}/withdraw`, { method: 'POST' })).status, 200);
+  assert.ok(!(await user('/api/content?scope=mine')).json.items.some(item => item.id === pending.id));
+  assert.ok(!(await admin('/api/content?scope=review')).json.items.some(item => item.id === pending.id));
+
+  const live = (await user('/api/content', { method: 'POST', body: { title: 'Approved stays', url: 'https://example.org/wd2' } })).json;
+  await admin(`/api/content/${live.id}/review`, { method: 'POST', body: { decision: 'approved' } });
+  assert.equal((await user(`/api/content/${live.id}/withdraw`, { method: 'POST' })).status, 409);
+});
+
+test('shared links preview only approved public uploads and need no sign-in', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const item = (await admin('/api/content', { method: 'POST', body: { title: 'Gita <Class> & "Q&A"', description: 'Chapter 2 summary', url: 'https://example.org/share' } })).json;
+  const page = await fetch(`${base}/s/${item.id}`);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.ok(html.includes('<meta property="og:title" content="Gita &lt;Class&gt; &amp; &quot;Q&amp;A&quot;">'), 'titles are escaped');
+  assert.ok(html.includes('og:description" content="Chapter 2 summary"'));
+  assert.ok(html.includes(`url=/?content=${item.id}#/library`));
+  assert.equal((await fetch(`${base}/api/share/${item.id}`)).status, 200);
+  assert.equal((await fetch(`${base}/api/share/${item.id}/image`)).status, 404, 'no thumbnail yet');
+
+  const pending = (await user('/api/content', { method: 'POST', body: { title: 'Secret pending title', url: 'https://example.org/share2' } })).json;
+  const hidden = await (await fetch(`${base}/s/${pending.id}`)).text();
+  assert.ok(!hidden.includes('Secret pending title'), 'pending titles never leak');
+  assert.ok(hidden.includes('url=/"'));
+});
+
+test('admins are warned when a Drive is nearly full', async () => {
+  const admin = await signIn('site_admin');
+  const db = app.locals.db;
+  await db.run(`INSERT INTO drives (id,name,folder_id,kind,types,created_at,enabled,quota_usage,quota_limit,quota_checked_at,refresh_token)
+    VALUES ('full-drive','Full Drive','folder-full','oauth','[]',?,1,95,100,?,'token')`, new Date().toISOString(), Date.now());
+  await db.run(`INSERT INTO drives (id,name,folder_id,kind,types,created_at,enabled,quota_usage,quota_limit,quota_checked_at,refresh_token)
+    VALUES ('roomy-drive','Roomy Drive','folder-roomy','oauth','[]',?,1,10,100,?,'token')`, new Date().toISOString(), Date.now());
+  const overview = (await admin('/api/overview')).json;
+  assert.deepEqual(overview.storage.nearlyFull, [{ name: 'Full Drive', percent: 95 }]);
+  assert.equal((await (await signIn('user'))('/api/overview')).json.storage, undefined, 'members never see storage details');  await db.run("DELETE FROM drives WHERE id IN ('full-drive', 'roomy-drive')");
+});

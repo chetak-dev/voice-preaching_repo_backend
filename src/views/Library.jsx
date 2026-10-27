@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Bookmark, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Search, Trash2, UploadCloud, User } from 'lucide-react';
+import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Search, Trash2, TrendingUp, Undo2, UploadCloud, User } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
 import { useMediaPlayer } from '../components/MediaPlayer.jsx';
@@ -22,6 +22,31 @@ function formatResumeTime(value) {
 const TITLES = { library: 'Library', saved: 'Saved', mine: 'My submissions' };
 
 const RECENT_KEY = 'voice.recentSearches';
+const SORT_KEY = 'voice.librarySort';
+const SORTS = {
+  newest: { label: 'Newest', compare: (a, b) => (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0) },
+  popular: { label: 'Most viewed', compare: (a, b) => (b.views || 0) - (a.views || 0) || (b.created_at > a.created_at ? 1 : -1) },
+  title: { label: 'A–Z', compare: (a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }) },
+  oldest: { label: 'Oldest', compare: (a, b) => (a.created_at > b.created_at ? 1 : a.created_at < b.created_at ? -1 : 0) },
+};
+// Highlight rows only appear once the library is big enough for them to differ from the grid below.
+const SHELF_MIN_ITEMS = 8;
+const SHELF_SIZE = 10;
+
+function Shelf({ title, icon: Icon, items, renderCard }) {
+  if (!items.length) return null;
+  return (
+    <section className="mb-6" aria-label={title}>
+      <h2 className="mb-2.5 flex items-center gap-2 text-sm font-semibold text-slate-800">
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><Icon className="h-3.5 w-3.5" /></span>
+        {title}
+      </h2>
+      <div className="no-scrollbar -mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:gap-3 sm:px-0">
+        {items.map(item => renderCard(item, 'w-[44%] shrink-0 snap-start sm:w-48 lg:w-52'))}
+      </div>
+    </section>
+  );
+}
 const loadRecent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
 
 function Highlight({ text, query }) {
@@ -149,13 +174,15 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   });
   const [status, setStatus] = useState('all');
   const [layout, setLayout] = useState('grid');
+  const [sort, setSort] = useState(() => { try { return SORTS[localStorage.getItem(SORT_KEY)] ? localStorage.getItem(SORT_KEY) : 'newest'; } catch { return 'newest'; } });
+  const changeSort = value => { setSort(value); try { localStorage.setItem(SORT_KEY, value); } catch { /* storage unavailable */ } };
   const [preview, setPreview] = useState(null);
   const [overrides, setOverrides] = useState({});
 
   const items = useMemo(() => (data?.items || []).map(item => ({ ...item, ...overrides[item.id] })), [data, overrides]);
-  const { lastContentId, progressById, openPlayer } = useMediaPlayer();
+  const { lastContentId, progressById, openPlayer, currentItem } = useMediaPlayer();
   const sharedOpenRef = useRef(null);
-  const continueItem = home ? items.find(item => item.id === lastContentId && ['audio', 'video'].includes(item.type) && item.visibility !== 'private') : null;
+  const continueItem = home && currentItem?.id !== lastContentId ? items.find(item => item.id === lastContentId && ['audio', 'video'].includes(item.type) && item.visibility !== 'private') : null;
   const continueProgress = continueItem ? progressById[continueItem.id] : null;
 
   const markThumb = useCallback(id => setOverrides(current => ({ ...current, [id]: { ...current[id], has_thumb: 1 } })), []);
@@ -180,8 +207,16 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
     const q = query.trim().toLowerCase();
     return visible.filter(item => (type === 'all' || item.type === type)
       && (status === 'all' || item.status === status)
-      && (!q || [item.title, item.description, item.uploader].some(value => value?.toLowerCase().includes(q))));
-  }, [visible, query, type, status]);
+      && (!q || [item.title, item.description, item.uploader].some(value => value?.toLowerCase().includes(q))))
+      .sort(SORTS[sort].compare);
+  }, [visible, query, type, status, sort]);
+  const shelves = useMemo(() => {
+    if (!home || query.trim() || type !== 'all' || visible.length < SHELF_MIN_ITEMS) return null;
+    return {
+      recent: [...visible].sort(SORTS.newest.compare).slice(0, SHELF_SIZE),
+      popular: [...visible].filter(item => item.views > 0).sort(SORTS.popular.compare).slice(0, SHELF_SIZE),
+    };
+  }, [home, query, type, visible]);
   const counts = useMemo(() => items.reduce((acc, item) => ({ ...acc, [item.type]: (acc[item.type] || 0) + 1 }), {}), [items]);
 
   async function toggleBookmark(item) {
@@ -219,6 +254,35 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   }
 
   const canDelete = () => user.role === 'site_admin';
+  const canWithdraw = item => item.uploader_id === user.id && item.status === 'pending';
+  const [withdrawing, setWithdrawing] = useState(null);
+  const [withdrawBusy, setWithdrawBusy] = useState(false);
+  async function withdraw() {
+    setWithdrawBusy(true);
+    try {
+      await api(`/content/${withdrawing.id}/withdraw`, { method: 'POST' });
+      toast(`Withdrew "${withdrawing.title}".`);
+      setWithdrawing(null);
+      setPreview(null);
+      reload();
+      onChanged?.();
+    } catch (err) { toast(err.message, 'error'); } finally { setWithdrawBusy(false); }
+  }
+  function edited(item, changes) {
+    setOverrides(current => ({ ...current, [item.id]: { ...current[item.id], ...changes } }));
+    setPreview(current => (current?.id === item.id ? { ...current, ...changes } : current));
+    toast('Details updated.');
+  }
+  const cardFooter = item => {
+    if (scope !== 'mine') return null;
+    if (canDelete(item)) return <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} className="text-rose-600 hover:bg-rose-50 hover:text-rose-700">Remove</Button>;
+    if (canWithdraw(item)) return <Button variant="ghost" size="sm" icon={Undo2} onClick={() => setWithdrawing(item)} className="text-slate-600 hover:bg-slate-100">Withdraw</Button>;
+    return null;
+  };
+  const renderCard = (item, className) => (
+    <ContentCard key={item.id} item={item} onPreview={openItem} onShare={share} showStatus={scope === 'mine'} className={className}
+      onBookmark={item.status === 'approved' && !item.parent_id ? toggleBookmark : undefined} footer={cardFooter(item)} />
+  );
 
   return (
     <div>
@@ -245,6 +309,16 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
               {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
             </select>
           )}
+          <label className="relative flex shrink-0 self-stretch" title="Sort">
+            <span className="flex w-[42px] items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-inset ring-slate-200 sm:hidden" aria-hidden="true">
+              <ArrowDownWideNarrow className="h-4 w-4" />
+            </span>
+            <ArrowDownWideNarrow className="pointer-events-none absolute left-3 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-slate-400 sm:block" />
+            <select className="input absolute inset-0 h-full w-full cursor-pointer opacity-0 sm:static sm:w-40 sm:pl-9 sm:opacity-100" value={sort}
+              onChange={e => changeSort(e.target.value)} aria-label="Sort by">
+              {Object.entries(SORTS).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
+            </select>
+          </label>
           <div className="flex shrink-0 rounded-xl bg-white p-1 ring-1 ring-inset ring-slate-200">
             {[['grid', LayoutGrid], ['list', List]].map(([key, Icon]) => (
               <button key={key} type="button" onClick={() => setLayout(key)} aria-label={`${key} view`} aria-pressed={layout === key}
@@ -284,15 +358,17 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
         />
       )}
 
+      {shelves && (
+        <>
+          <Shelf title="Recently added" icon={Clock} items={shelves.recent} renderCard={renderCard} />
+          <Shelf title="Most viewed" icon={TrendingUp} items={shelves.popular} renderCard={renderCard} />
+          <h2 className="mb-2.5 text-sm font-semibold text-slate-800">All content</h2>
+        </>
+      )}
+
       {filtered.length > 0 && layout === 'grid' && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-5">
-          {filtered.map(item => (
-            <ContentCard key={item.id} item={item} onPreview={openItem} onShare={share} showStatus={scope === 'mine'}
-              onBookmark={item.status === 'approved' && !item.parent_id ? toggleBookmark : undefined}
-              footer={scope === 'mine' && canDelete(item) && (
-                <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} className="text-rose-600 hover:bg-rose-50 hover:text-rose-700">Remove</Button>
-              )} />
-          ))}
+          {filtered.map(item => renderCard(item))}
         </div>
       )}
 
@@ -329,6 +405,9 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                 {scope === 'mine' && canDelete(item) && (
                   <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} aria-label="Remove" className="text-rose-600 hover:bg-rose-50" />
                 )}
+                {scope === 'mine' && !canDelete(item) && canWithdraw(item) && (
+                  <Button variant="ghost" size="sm" icon={Undo2} onClick={() => setWithdrawing(item)} aria-label="Withdraw" title="Withdraw" className="text-slate-600 hover:bg-slate-100" />
+                )}
               </div>
             );
           })}
@@ -336,11 +415,26 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
       )}
 
       <PreviewModal item={preview} onShare={share} onClose={() => setPreview(null)} user={user}
-        onAddTo={target => { setPreview(null); onAddTo?.(target); }}
-        actions={preview && canDelete() && (
+        onAddTo={target => { setPreview(null); onAddTo?.(target); }} onEdited={edited}
+        actions={preview && (canDelete() ? (
           <Button variant="secondary" icon={Trash2} onClick={() => remove(preview)} className="text-rose-600">Remove</Button>
-        )} />
+        ) : canWithdraw(preview) && (
+          <Button variant="secondary" icon={Undo2} onClick={() => { setWithdrawing(preview); setPreview(null); }}>Withdraw</Button>
+        ))} />
       <RemoveContentModal item={removing} onClose={() => setRemoving(null)} onRemoved={removed} />
+      <Modal open={Boolean(withdrawing)} onClose={withdrawBusy ? () => {} : () => setWithdrawing(null)} size="sm" title="Withdraw submission?"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setWithdrawing(null)} disabled={withdrawBusy}>Keep it</Button>
+            <Button variant="danger" icon={Undo2} loading={withdrawBusy} onClick={withdraw}>Withdraw</Button>
+          </>
+        )}>
+        {withdrawing && (
+          <p className="text-sm text-slate-600">
+            <span className="font-semibold text-slate-900">{withdrawing.title}</span> will be taken out of the review queue and deleted, together with any files you added to it. You can upload it again later.
+          </p>
+        )}
+      </Modal>
     </div>
   );
 }

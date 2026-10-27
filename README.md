@@ -15,6 +15,11 @@ A professional content-sharing platform for communities. Members contribute **im
 - **Overview** (admins only) — storage use and totals by content type. Members never see storage figures.
 - **Adding to an upload** — open any item and choose **Add files** to attach more files or links to it. Contributors can add to their own upload while it is pending or approved; anyone can add to an approved upload. Each addition is reviewed separately, earns its contributor points once approved, and is removed if the upload is deleted. Rejecting an upload also rejects its pending additions.
 - **Multi-Google-Drive storage** — connect as many Drives as you need; uploads are routed automatically (see below).
+- **Library** — sort by newest, most viewed, A–Z or oldest (remembered per device). When there are 8 or more items, "Recently added" and "Most viewed" rows appear above the full list.
+- **Editing and withdrawing** — site and org admins can fix an item's title and description from its preview (**Edit**). Contributors can **Withdraw** their own submission while it is still pending. Reviewers can approve or reject many pending items at once; a bulk rejection uses one shared note.
+- **Media player** — audio and video keep playing while you browse, with ±15 second skip, playback speed, a minimised mode and lock-screen / headphone controls on phones.
+- **Share links** — **Share** copies a `/s/<id>` link. Apps like WhatsApp show the item's title, description and thumbnail as a preview, then open it in the app. Only approved, public items reveal any details; anything else shows a generic Kalpa Taru preview.
+- **Install as an app** — Kalpa Taru is a PWA. Use **Install app** in the sidebar (or the **More** menu on phones); on iPhone it shows the Share → *Add to Home Screen* steps.
 - Sign up / sign in with email + password or Google (one sign-in page for every role), scrypt-hashed passwords, file signature verification, rate limiting, CSRF origin checks, encrypted refresh tokens, audit log.
 
 ## Quick start (local)
