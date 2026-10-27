@@ -4,7 +4,7 @@ import { api, fileUrl, thumbnailUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
 import FullPreview from './FullPreview.jsx';
 import { Badge, Button, Modal, STATUS_META, TYPE_META, cx, formatBytes, timeAgo } from './ui.jsx';
-import { TagChips, TagFields, refreshFacets, tagsOf } from './Tags.jsx';
+import { TagChips } from './Tags.jsx';
 import DownloadButton from './DownloadButton.jsx';
 
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -208,18 +208,16 @@ const MIME_INLINE = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'applica
 export function EditContentModal({ item, onClose, onSaved }) {
   const [title, setTitle] = useState(item?.title || '');
   const [description, setDescription] = useState(item?.description || '');
-  const [tags, setTags] = useState(() => tagsOf(item));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { setTitle(item?.title || ''); setDescription(item?.description || ''); setTags(tagsOf(item)); setError(''); }, [item?.id]);
+  useEffect(() => { setTitle(item?.title || ''); setDescription(item?.description || ''); setError(''); }, [item?.id]);
   async function submit(event) {
     event.preventDefault();
     if (!title.trim() || busy) return;
     setBusy(true); setError('');
     try {
-      const saved = await api(`/content/${item.id}`, { method: 'PATCH', body: { title: title.trim(), description: description.trim(), ...tags } });
-      refreshFacets();
-      onSaved({ title: saved.title, description: saved.description, language: saved.language, speaker: saved.speaker, verses: saved.verses, topics: saved.topics });
+      const saved = await api(`/content/${item.id}`, { method: 'PATCH', body: { title: title.trim(), description: description.trim() } });
+      onSaved({ title: saved.title, description: saved.description });
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   return (
@@ -239,7 +237,6 @@ export function EditContentModal({ item, onClose, onSaved }) {
           <span className="label">Description</span>
           <textarea className="input min-h-[96px]" value={description} onChange={e => setDescription(e.target.value)} maxLength={2000} placeholder="Optional" />
         </label>
-        <TagFields value={tags} onChange={setTags} idPrefix="edit-tags" />
         {error && <p className="text-sm text-rose-600">{error}</p>}
       </form>
     </Modal>

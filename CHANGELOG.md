@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.6
+
+- Edit details now shows only title and description (existing tags are kept).
+
 ## 1.7.5
 
 - Duplicate warning before upload: if a file or link is already in Kalpa Taru, a prompt lists the duplicates before anything is sent, with **Remove** or **Upload anyway**. Submitting waits for the check to finish so the warning is never skipped.
