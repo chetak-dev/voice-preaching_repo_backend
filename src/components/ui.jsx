@@ -49,7 +49,7 @@ export function LogoMark({ className }) {
 
 export const APP_NAME = 'Kalpa Taru';
 
-export function Logo({ size = 'md', light = false, tagline = true, textClassName }) {
+export function Logo({ size = 'md', light = false, textClassName }) {
   const box = size === 'lg' ? 'h-11 w-11 rounded-2xl' : size === 'sm' ? 'h-8 w-8 rounded-xl' : 'h-9 w-9 rounded-xl';
   return (
     <div className="flex items-center gap-2.5">
@@ -57,7 +57,6 @@ export function Logo({ size = 'md', light = false, tagline = true, textClassName
       <div className={cx('leading-none', textClassName)}>
         <p className={cx('whitespace-nowrap font-extrabold uppercase tracking-[0.12em]', size === 'lg' ? 'text-xl' : 'text-base',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
-        {tagline && <p className={cx('mt-px text-[11px] font-medium', light ? 'text-white/70' : 'text-slate-500')}>Content Hub</p>}
       </div>
     </div>
   );
@@ -174,7 +173,6 @@ export function SplashLoader() {
       </div>
       <div className="text-center">
         <p className="bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-lg font-extrabold uppercase tracking-[0.12em] text-transparent">{APP_NAME}</p>
-        <p className="text-xs font-medium text-slate-500">Content Hub</p>
       </div>
       <div className="h-1 w-40 overflow-hidden rounded-full bg-brand-100">
         <div className="h-full w-2/5 animate-load-bar rounded-full bg-voice" />

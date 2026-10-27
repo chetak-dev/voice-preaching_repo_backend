@@ -4,7 +4,7 @@ The version shown in the app (sidebar on desktop, **More** menu on phones) comes
 
 ## 1.3.0 — 2026-10-27
 
-- Renamed the app to **Kalpa Taru**, with a new wish-fulfilling tree logo (app icon, favicon, sign-in page, sidebar, loading screen).
+- Renamed the app to **Kalpa Taru**, with a new wish-fulfilling tree logo (app icon, favicon, sign-in page, sidebar, loading screen). The "Content Hub" tagline is removed; the app is simply Kalpa Taru.
 - Newly connected Google Drives get a **Kalpa Taru Media** folder. Drives connected earlier keep using their **VOICE Media** folder, including after a reconnect.
 
 ## 1.2.2 — 2026-10-26

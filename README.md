@@ -1,4 +1,4 @@
-# Kalpa Taru — Moderated Content Hub
+# Kalpa Taru
 
 A professional content-sharing platform for communities. Members contribute **images, video, audio, documents and links**; every contribution is reviewed by an **admin** before it is published. On phones it looks and feels like an Android app (bottom navigation, floating upload button, bottom sheets) and can be installed to the home screen. Files are stored across **multiple Google Drives** with automatic routing.
 

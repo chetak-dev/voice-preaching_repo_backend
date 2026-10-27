@@ -10,7 +10,7 @@ const contact = CONTACT
 
 const PRIVACY = [
   ['overview', 'Overview', <>
-    <p>Kalpa Taru Content Hub (“Kalpa Taru”, “we”, “us”) is a moderated platform where members share lectures, audio, video, documents, images and links with their community. This policy explains what information we collect, why we collect it, and the choices you have.</p>
+    <p>Kalpa Taru (“we”, “us”) is a moderated platform where members share lectures, audio, video, documents, images and links with their community. This policy explains what information we collect, why we collect it, and the choices you have.</p>
   </>],
   ['collect', 'Information we collect', <>
     <ul>
@@ -64,7 +64,7 @@ const PRIVACY = [
 
 const TERMS = [
   ['acceptance', 'Acceptance of these terms', <>
-    <p>By creating an account or using Kalpa Taru Content Hub (“Kalpa Taru”), you agree to these Terms and to our <a className="font-medium text-brand-700 hover:underline" href="#/privacy">Privacy Policy</a>. If you do not agree, please do not use the service.</p>
+    <p>By creating an account or using Kalpa Taru, you agree to these Terms and to our <a className="font-medium text-brand-700 hover:underline" href="#/privacy">Privacy Policy</a>. If you do not agree, please do not use the service.</p>
   </>],
   ['accounts', 'Your account', <>
     <ul>
@@ -120,7 +120,7 @@ const PAGES = {
 export default function Legal({ page, signedIn }) {
   const { title, icon: Icon, sections } = PAGES[page];
   const other = page === 'privacy' ? 'terms' : 'privacy';
-  useEffect(() => { window.scrollTo(0, 0); document.title = `${title} | Kalpa Taru`; return () => { document.title = 'Kalpa Taru | Content Hub'; }; }, [title]);
+  useEffect(() => { window.scrollTo(0, 0); document.title = `${title} | Kalpa Taru`; return () => { document.title = 'Kalpa Taru'; }; }, [title]);
   const jump = id => event => { event.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
   return (
