@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  Bell, Bookmark, ClipboardCheck, CloudDownload, CloudOff, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, MessageSquarePlus, Monitor,
+  Bell, Bookmark, ChevronDown, ClipboardCheck, CloudDownload, CloudOff, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, MessageSquarePlus, Monitor,
   Moon, PieChart, Plus, RefreshCw, Share, Sun, Trophy, UploadCloud, Users,
 } from 'lucide-react';
 import { api } from './api.js';
@@ -97,10 +97,69 @@ function PointsPill({ points, onClick, light }) {
   return (
     <button type="button" onClick={onClick} title="Leaderboard" aria-label={`Leaderboard, ${points ?? 0} points`}
       className={cx('flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition active:scale-95',
-        light ? 'bg-white/15 text-white ring-1 ring-white/30 hover:bg-white/25' : 'bg-amber-400/15 text-amber-300 ring-1 ring-amber-300/30 hover:bg-amber-400/25')}>
+        light ? 'bg-white/15 text-white ring-1 ring-white/30 hover:bg-white/25' : 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200 hover:bg-amber-100')}>
       <Trophy className="h-3.5 w-3.5" />
       {points == null ? '–' : points.toLocaleString()}
     </button>
+  );
+}
+
+function ProfileMenu({ user, points, onLeaderboard, onSignOut, light }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const role = ROLE_META[user.role];
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = event => { if (!ref.current?.contains(event.target)) setOpen(false); };
+    const onKey = event => event.key === 'Escape' && setOpen(false);
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const close = then => () => { setOpen(false); then(); };
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(value => !value)} aria-haspopup="menu" aria-expanded={open} aria-label="Account"
+        className={cx('flex items-center gap-2.5 rounded-full transition active:scale-95',
+          light ? 'ring-2 ring-white/40' : 'py-1 pl-1 pr-2.5 ring-1 ring-inset ring-slate-200 hover:bg-slate-50', open && !light && 'bg-slate-50')}>
+        <Avatar name={user.name} size="sm" />
+        {!light && (
+          <>
+            <span className="max-w-[10rem] text-left leading-tight">
+              <span className="block truncate text-sm font-semibold text-slate-900">{user.name}</span>
+              <span className="block truncate text-[11px] text-slate-500">{role.label}</span>
+            </span>
+            <ChevronDown className={cx('h-4 w-4 text-slate-400 transition', open && 'rotate-180')} />
+          </>
+        )}
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-72 origin-top-right animate-fade-in overflow-hidden rounded-2xl bg-white text-slate-900 shadow-pop ring-1 ring-slate-200">
+          <div className="flex items-center gap-3 px-4 py-4">
+            <Avatar name={user.name} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-slate-900">{user.name}</p>
+              <p className="truncate text-xs text-slate-500">{user.email}</p>
+              <Badge tone={role.tone} className="mt-1">{role.label}</Badge>
+            </div>
+          </div>
+          <div className="space-y-3 border-t border-slate-200 px-4 py-3">
+            <button type="button" role="menuitem" onClick={close(onLeaderboard)}
+              className="flex w-full items-center justify-between rounded-xl px-2 py-1.5 text-sm text-slate-700 transition hover:bg-slate-50">
+              <span className="flex items-center gap-2"><Trophy className="h-4 w-4 text-amber-500" />Points</span>
+              <span className="font-semibold">{points == null ? '–' : points.toLocaleString()}</span>
+            </button>
+            <ThemeSwitch />
+          </div>
+          <div className="border-t border-slate-200 p-2">
+            <button type="button" role="menuitem" onClick={close(onSignOut)}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-rose-600 transition hover:bg-rose-50">
+              <LogOut className="h-4 w-4" />Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -242,19 +301,7 @@ function Shell({ user, config, onSignOut }) {
             );
           })}
         </nav>
-        <div className="relative m-3 w-14 overflow-hidden rounded-2xl bg-white/5 p-[10px] ring-1 ring-white/10 transition-[width] duration-200 group-hover/side:w-[264px] group-focus-within/side:w-[264px]">
-          <div className="flex w-[244px] items-center gap-3">
-            <Avatar name={user.name} />
-            <div className={cx('min-w-0 flex-1', reveal)}>
-              <p className="truncate text-sm font-semibold">{user.name}</p>
-              <p className="truncate text-xs text-white/50">{role.label}</p>
-            </div>
-            <div className={cx('flex items-center gap-1', reveal)}>
-              <PointsPill points={points} onClick={() => navigate('leaderboard')} />
-            </div>
-          </div>
-        </div>
-        <div className="relative w-72 space-y-1.5 px-3 pb-3">
+        <div className="relative w-72 space-y-1.5 px-3 pb-3 pt-2">
           {canInstall && (
             <button type="button" onClick={install} title="Install app"
               className="flex w-14 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-[width,background-color] duration-200 hover:bg-white/10 hover:text-white group-hover/side:w-full group-focus-within/side:w-full">
@@ -262,11 +309,6 @@ function Shell({ user, config, onSignOut }) {
               <span className={cx('whitespace-nowrap', reveal)}>Install app</span>
             </button>
           )}
-          <button type="button" onClick={askSignOut} title="Sign out"
-            className="flex w-14 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold text-rose-200 ring-1 ring-inset ring-rose-400/30 transition-[width,background-color] duration-200 hover:bg-rose-500/15 hover:text-white group-hover/side:w-full group-focus-within/side:w-full">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300"><LogOut className="h-4 w-4" /></span>
-            <span className={cx('whitespace-nowrap', reveal)}>Sign out</span>
-          </button>
         </div>
         <div className="relative mb-3 w-20 space-y-1 text-center text-[10px] text-white/40 transition-[width] duration-200 group-hover/side:w-72 group-focus-within/side:w-72">
           <p className="flex items-center justify-center gap-1 whitespace-nowrap">
@@ -291,14 +333,26 @@ function Shell({ user, config, onSignOut }) {
             <Bell className="h-5 w-5" />
             <CountBadge value={notifications.unread} className="absolute -right-0.5 -top-0.5 ring-2 ring-voice" />
           </button>
-          <button type="button" onClick={() => setSheetOpen(true)} className="rounded-full ring-2 ring-white/40 transition active:scale-95" aria-label="Account and menu">
-            <Avatar name={user.name} size="sm" />
-          </button>
+          <ProfileMenu light user={user} points={points} onLeaderboard={() => navigate('leaderboard')} onSignOut={askSignOut} />
         </div>
       </header>
 
       <div className="overflow-x-clip lg:pl-20">
-        <main key={active} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-10">{page}</main>
+        <header className="sticky top-0 z-30 hidden border-b border-slate-200/70 bg-white/90 backdrop-blur lg:block">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-end gap-3 px-10">
+            <PointsPill points={points} onClick={() => navigate('leaderboard')} />
+            <button type="button" onClick={() => navigate('notifications')} title="Notifications"
+              aria-label={`Notifications${notifications.unread ? `, ${notifications.unread} unread` : ''}`}
+              className={cx('relative flex h-10 w-10 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700',
+                active === 'notifications' && 'bg-slate-100 text-slate-700')}>
+              <Bell className="h-5 w-5" />
+              <CountBadge value={notifications.unread} className="absolute right-0.5 top-0.5 ring-2 ring-white" />
+            </button>
+            <span className="h-6 w-px bg-slate-200" aria-hidden="true" />
+            <ProfileMenu user={user} points={points} onLeaderboard={() => navigate('leaderboard')} onSignOut={askSignOut} />
+          </div>
+        </header>
+        <main key={active} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-8">{page}</main>
       </div>
       {active !== 'upload' && <UploadTray />}
 

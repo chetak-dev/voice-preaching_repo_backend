@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.2
+
+- Profile menu and Sign out moved to the top right. On desktop, a top bar shows points, notifications and the profile menu (name, email, role, theme, Sign out); on phones the avatar at the top right opens the same menu.
+
 ## 1.7.1
 
 - Removed the Filters button from the library. Tapping a tag in a preview still filters the library, with a Clear button.
