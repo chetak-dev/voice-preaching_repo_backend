@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.5.3
+
+- Larger "Kalpa Taru" and "ISKCON Brahmapur" next to the logo, so the two lines fill the logo's height with only a small gap between them.
+
 ## 1.5.2
 
 - The two text lines next to the logo now span exactly the logo's height: the top of "Kalpa Taru" lines up with the top of the logo and the bottom of "ISKCON Brahmapur" with its bottom.

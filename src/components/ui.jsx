@@ -56,9 +56,9 @@ export function Logo({ size = 'md', light = false, textClassName }) {
     <div className="flex items-center gap-2.5">
       <LogoMark className={cx('shrink-0 shadow-glow', box, light && 'ring-2 ring-white/30')} />
       <div className={cx('flex flex-col justify-between leading-none', size === 'lg' ? 'h-11' : size === 'sm' ? 'h-8' : 'h-9', textClassName)}>
-        <p className={cx('whitespace-nowrap font-extrabold uppercase leading-none tracking-[0.12em] -mt-[0.125em]', size === 'lg' ? 'text-xl' : 'text-base',
+        <p className={cx('whitespace-nowrap font-extrabold uppercase leading-none tracking-[0.12em] -mt-[0.125em]', size === 'lg' ? 'text-[32px]' : size === 'sm' ? 'text-[23px]' : 'text-[26px]',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
-        <p className={cx('whitespace-nowrap font-semibold uppercase leading-none -mb-[0.12em]', size === 'lg' ? 'text-[11px] tracking-[0.19em]' : 'text-[9px] tracking-[0.17em]',
+        <p className={cx('whitespace-nowrap font-semibold uppercase leading-none -mb-[0.12em]', 'tracking-[0.235em]', size === 'lg' ? 'text-[16.5px]' : size === 'sm' ? 'text-[12px]' : 'text-[13.5px]',
           light ? 'text-white/70' : 'text-slate-500')}>{APP_ORG}</p>
       </div>
     </div>
