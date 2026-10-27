@@ -483,7 +483,7 @@ export function createApp(overrides = {}) {
     const parent = await additionTarget(req);
     const target = req.user.role === 'site_admin' ? req.body.targetDriveId || 'auto' : 'auto';
     const id = randomUUID();
-    const started = await storage.startUpload({ id, target, name, mime, size });
+    const started = await storage.startUpload({ id, target, name, mime, size, type });
     await db.run(`INSERT INTO uploads (id,user_id,title,description,type,mime,original_name,size,node,session_uri,created_at,parent_id)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, id, req.user.id, title, description, type, mime, name, size,
     started.node, started.sessionUri, Date.now(), parent?.id ?? null);

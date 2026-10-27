@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.5.0 — 2026-10-27
+
+- Google Drive uploads are now sorted into **Images**, **Videos**, **Audios** and **Documents** subfolders inside the app's Drive folder (**VOICE Media** or **Kalpa Taru Media**). Each subfolder is created automatically the first time that type is uploaded. Files uploaded earlier stay where they are and keep working. If a subfolder can't be prepared, the upload goes into the main folder instead of failing.
+
 ## 1.4.0 — 2026-10-27
 
 - **Removing content is now site-admin only and deliberate.** Members and org admins can no longer delete anything, including their own pending submissions. A site admin must write a reason (at least 5 characters) and type REMOVE to confirm. The reason is saved in the activity log.

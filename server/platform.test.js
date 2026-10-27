@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp, googleProblem } from './app.js';
 import { hashPassword } from './db.js';
-import { APP_FOLDER, boundedRange, ensureAppFolder } from './storage.js';
+import { APP_FOLDER, TYPE_FOLDERS, boundedRange, ensureAppFolder, ensureTypeFolder } from './storage.js';
 
 const ORIGIN = 'http://localhost:5173';
 const TEST_PASSWORD = 'test-password';
@@ -420,6 +420,21 @@ test('personal Drives use their own app folder, reusing it when possible', async
   assert.ok(calls.some(([kind, q]) => kind === 'list' && q.includes("name = 'VOICE Media'")));
   assert.equal(await ensureAppFolder(fake({ listed: [{ id: 'old', name: 'VOICE Media' }, { id: 'current', name: APP_FOLDER }] }), ''), 'current');
   assert.equal(await ensureAppFolder(fake({ listed: [{ id: 'old', name: 'VOICE Media' }] }), ''), 'old');
+});
+
+test('uploads go into per-type subfolders that are created once and then reused', async () => {
+  const calls = [];
+  const fake = listed => ({
+    files: {
+      list: async ({ q }) => { calls.push(['list', q]); return { data: { files: listed } }; },
+      create: async ({ requestBody }) => { calls.push(['create', requestBody]); return { data: { id: 'videos-new' } }; },
+    },
+  });
+  assert.equal(await ensureTypeFolder(fake([{ id: 'videos-existing' }]), 'app-folder', TYPE_FOLDERS.video), 'videos-existing');
+  assert.ok(calls[0][1].includes("name = 'Videos'") && calls[0][1].includes("'app-folder' in parents"));
+  assert.equal(await ensureTypeFolder(fake([]), 'app-folder', TYPE_FOLDERS.video), 'videos-new');
+  assert.deepEqual(calls.at(-1)[1], { name: 'Videos', mimeType: 'application/vnd.google-apps.folder', parents: ['app-folder'] });
+  assert.deepEqual(Object.values(TYPE_FOLDERS), ['Images', 'Videos', 'Audios', 'Documents']);
 });
 
 test('serverless hosts refuse file uploads until a Google Drive is connected', async () => {

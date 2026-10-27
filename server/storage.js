@@ -84,6 +84,22 @@ export async function ensureAppFolder(drive, currentId) {
   return data.id;
 }
 
+export const TYPE_FOLDERS = { image: 'Images', video: 'Videos', audio: 'Audios', doc: 'Documents' };
+
+/** Returns the id of the per-type subfolder (e.g. "Videos") inside the app folder, creating it on first use. */
+export async function ensureTypeFolder(drive, parentId, name) {
+  const { data: found } = await drive.files.list({
+    q: `name = '${name}' and mimeType = '${FOLDER_MIME}' and '${parentId}' in parents and trashed = false`,
+    fields: 'files(id)', orderBy: 'createdTime', pageSize: 1,
+    corpora: 'allDrives', includeItemsFromAllDrives: true, supportsAllDrives: true,
+  });
+  if (found.files?.length) return found.files[0].id;
+  const { data } = await drive.files.create({
+    requestBody: { name, mimeType: FOLDER_MIME, parents: [parentId] }, fields: 'id', supportsAllDrives: true,
+  });
+  return data.id;
+}
+
 async function accessToken(node, config) {
   const result = await authFor(node, config).getAccessToken();
   const token = typeof result === 'string' ? result : result?.token;
@@ -185,13 +201,30 @@ export function createStorage(config, db) {
     return node;
   }
 
+  // Per-process cache of type subfolder ids; concurrent uploads share one lookup so a folder isn't created twice.
+  const typeFolders = new Map();
+  function folderFor(node, type) {
+    const name = TYPE_FOLDERS[type];
+    if (!name) return Promise.resolve(node.folder_id);
+    const key = `${node.id}:${node.folder_id}:${type}`;
+    if (!typeFolders.has(key)) {
+      typeFolders.set(key, ensureTypeFolder(driveClient(node, config), node.folder_id, name).catch(error => {
+        typeFolders.delete(key);
+        console.warn(`Could not prepare the "${name}" folder on "${node.name}"; using the main folder:`, error.message);
+        return node.folder_id;
+      }));
+    }
+    return typeFolders.get(key);
+  }
+
   return {
-    async startUpload({ id, target, name, mime, size }) {
+    async startUpload({ id, target, name, mime, size, type }) {
       const node = await destination(target, size);
       if (!node) {
         await writeFile(localPath(id), '');
         return { node: 'local', sessionUri: null };
       }
+      const folder = await folderFor(node, type);
       const response = await fetch(DRIVE_UPLOAD, {
         method: 'POST',
         headers: {
@@ -200,7 +233,7 @@ export function createStorage(config, db) {
           'X-Upload-Content-Type': mime,
           'X-Upload-Content-Length': String(size),
         },
-        body: JSON.stringify({ name, parents: [node.folder_id] }),
+        body: JSON.stringify({ name, parents: [folder] }),
       });
       const sessionUri = response.headers.get('location');
       if (!response.ok || !sessionUri) throw await googleError(response, 'Google Drive refused to start the upload');
