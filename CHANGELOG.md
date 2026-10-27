@@ -2,6 +2,11 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.5.1
+
+- The loading screen shows only the Kalpa Taru name.
+- "ISKCON Brahmapur" sits under the name as a small, spaced capital line that is exactly as wide as the name, so it lines up with the logo.
+
 ## 1.5.0 — 2026-10-27
 
 - Google Drive uploads are now sorted into **Images**, **Videos**, **Audios** and **Documents** subfolders inside the app's Drive folder (**VOICE Media** or **Kalpa Taru Media**). Each subfolder is created automatically the first time that type is uploaded. Files uploaded earlier stay where they are and keep working. If a subfolder can't be prepared, the upload goes into the main folder instead of failing.

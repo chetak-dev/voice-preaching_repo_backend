@@ -55,10 +55,11 @@ export function Logo({ size = 'md', light = false, textClassName }) {
   return (
     <div className="flex items-center gap-2.5">
       <LogoMark className={cx('shrink-0 shadow-glow', box, light && 'ring-2 ring-white/30')} />
-      <div className={cx('leading-none', textClassName)}>
+      <div className={cx('flex flex-col justify-center gap-[3px] leading-none', textClassName)}>
         <p className={cx('whitespace-nowrap font-extrabold uppercase tracking-[0.12em]', size === 'lg' ? 'text-xl' : 'text-base',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
-        <p className={cx('mt-1 whitespace-nowrap font-medium', size === 'lg' ? 'text-xs' : 'text-[10px]', light ? 'text-white/70' : 'text-slate-500')}>{APP_ORG}</p>
+        <p className={cx('whitespace-nowrap font-semibold uppercase', size === 'lg' ? 'text-[11px] tracking-[0.19em]' : 'text-[9px] tracking-[0.17em]',
+          light ? 'text-white/70' : 'text-slate-500')}>{APP_ORG}</p>
       </div>
     </div>
   );
@@ -183,7 +184,6 @@ export function SplashLoader() {
       </div>
       <div className="text-center">
         <p className="bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-lg font-extrabold uppercase tracking-[0.12em] text-transparent">{APP_NAME}</p>
-        <p className="mt-1 text-xs font-medium text-slate-500">{APP_ORG}</p>
       </div>
       <div className="h-1 w-40 overflow-hidden rounded-full bg-brand-100">
         <div className="h-full w-2/5 animate-load-bar rounded-full bg-voice" />
