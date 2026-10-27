@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.3.1 — 2026-10-27
+
+- Content cards: the view count, share and save buttons now sit together, smaller, on the bottom line, so the title gets the full card width.
+
 ## 1.3.0 — 2026-10-27
 
 - Renamed the app to **Kalpa Taru**, with a new wish-fulfilling tree logo (app icon, favicon, sign-in page, sidebar, loading screen). The "Content Hub" tagline is removed; the app is simply Kalpa Taru.

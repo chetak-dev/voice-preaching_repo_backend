@@ -104,18 +104,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
       </button>
       <div className="flex flex-1 flex-col p-2 sm:p-3">
         {item.parent_title && <p className="mb-0.5 truncate text-[11px] font-medium text-brand-700">Added to: {item.parent_title}</p>}
-        <div className="flex items-start justify-between gap-1">
-          <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
-          <div className="-mr-1 -mt-0.5 flex shrink-0 items-center">
-            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} />}
-            {onBookmark && (
-              <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
-                className={cx('rounded-md p-1 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
-                <Bookmark className="h-4 w-4" fill={item.bookmarked ? 'currentColor' : 'none'} />
-              </button>
-            )}
-          </div>
-        </div>
+        <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
         {item.description && <p className="mt-0.5 hidden text-xs text-slate-500 sm:line-clamp-1">{item.description}</p>}
         {showStatus && (
           <div className="mt-2"><Badge tone={STATUS_META[item.status].tone} className="px-1.5 py-0.5 text-[10px]">{STATUS_META[item.status].label}</Badge></div>
@@ -125,9 +114,16 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
         )}
         <div className="mt-auto flex items-center gap-1.5 pt-1.5 text-[10px] text-slate-500 sm:pt-2 sm:text-[11px]">
           <span className="min-w-0 truncate">{item.uploader}</span>
-          <span className="ml-auto flex shrink-0 items-center gap-2">
-            {item.status === 'approved' && <ViewCount value={item.views} className="[&_svg]:h-3 [&_svg]:w-3" />}
-            <span className="hidden sm:inline">{timeAgo(item.created_at)}</span>
+          <span className="hidden shrink-0 sm:inline">· {timeAgo(item.created_at)}</span>
+          <span className="-mr-1 ml-auto flex shrink-0 items-center gap-0.5">
+            {item.status === 'approved' && <ViewCount value={item.views} className="mr-0.5 [&_svg]:h-3 [&_svg]:w-3" />}
+            {onShare && canShare(item) && <ShareButton item={item} onShare={onShare} className="p-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5" />}
+            {onBookmark && (
+              <button type="button" onClick={() => onBookmark(item)} aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
+                className={cx('rounded-md p-0.5 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
+                <Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} />
+              </button>
+            )}
           </span>
         </div>
         {footer && <div className="mt-2 border-t border-slate-100 pt-1.5">{footer}</div>}
