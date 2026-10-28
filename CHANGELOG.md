@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.11
+
+- Uploads can be cancelled after they start: **Cancel** on the Contribute page, an ✕ on each item, and **Cancel** / ✕ in the upload tray. Anything already sent is discarded and nothing appears in the library.
+
 ## 1.7.10
 
 - Phones: the sort box (**Newest**) is no longer cut off in the library toolbar.

@@ -37,6 +37,7 @@ let jobs = [];
 let owner = null;
 let running = false;
 let controller = null;
+let currentId = null;
 let wakeLock = null;
 let notify = () => {};
 const listeners = new Set();
@@ -54,9 +55,11 @@ const find = id => jobs.find(job => job.id === id);
 function patch(id, changes) {
   jobs = jobs.map(job => (job.id === id ? { ...job, ...changes } : job));
   const job = find(id);
-  job?.onUpdate?.({ status: job.status, progress: job.progress, error: job.error });
+  job?.onUpdate?.({ id: job.id, status: job.status, progress: job.progress, error: job.error });
   emit();
 }
+const cancelled = id => find(id)?.status === 'cancelled';
+const discard = uploadId => api(`/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE' }).catch(() => {});
 
 async function holdScreen(on) {
   try {
@@ -99,6 +102,7 @@ function settle(job, status, error = '', result = null) {
 
 async function process(job) {
   patch(job.id, { status: 'uploading', error: '' });
+  currentId = job.id;
   try {
     if (job.kind === 'link') {
       settle(job, 'done', '', await api('/content', { method: 'POST', body: { ...job.fields, url: job.url } }));
@@ -113,18 +117,20 @@ async function process(job) {
       patch(job.id, { progress: Math.min(99, Math.round((offset / job.size) * 100)) });
     } else {
       ({ id: uploadId, chunkSize } = await startUpload(job.file, job.fields));
+      if (cancelled(job.id)) { discard(uploadId); return; }
       patch(job.id, { uploadId, chunkSize });
       saved.put({
         id: job.id, owner, uploadId, chunkSize, file: job.file, name: job.name, size: job.size, title: job.title, createdAt: Date.now(),
       });
     }
+    if (cancelled(job.id)) return;
     controller = new AbortController();
     const result = await sendUpload({
       id: uploadId, chunkSize, file: job.file, offset, signal: controller.signal, onProgress: progress => patch(job.id, { progress }),
     });
     settle(job, 'done', '', result);
   } catch (error) {
-    if (error.name === 'AbortError' || !find(job.id)) return;
+    if (error.name === 'AbortError' || !find(job.id) || cancelled(job.id)) return;
     if (error.status === 0) {
       // Keep the upload: it continues from the last saved chunk once the connection is back.
       patch(job.id, { status: 'waiting', error: 'Waiting for connection…' });
@@ -137,6 +143,7 @@ async function process(job) {
     settle(job, 'error', error.status === 404 ? 'This upload expired. Please upload the file again.' : error.message);
   } finally {
     controller = null;
+    currentId = null;
   }
 }
 
@@ -159,9 +166,11 @@ const newId = () => `${Date.now().toString(36)}-${(nextId += 1)}-${Math.random()
 // Adds items ({ key, kind: 'file'|'link', file, url, title, fields, onUpdate }) and resolves once all have finished.
 export function enqueue(items) {
   const added = items.map(item => new Promise(resolve => {
+    const id = newId();
+    item.onUpdate?.({ id, status: 'queued', progress: 0, error: '' });
     jobs = [...jobs, {
       ...item,
-      id: newId(),
+      id,
       name: item.kind === 'file' ? item.file.name : item.url,
       size: item.kind === 'file' ? item.file.size : 0,
       status: 'queued',
@@ -201,6 +210,22 @@ export function forget(ids) {
 export function dismissFinished() {
   jobs = jobs.filter(isActive);
   emit();
+}
+
+// A link that is already being sent can't be stopped part way, so only queued links can be cancelled.
+export const canCancel = job => isActive(job) && !(job.kind === 'link' && job.status === 'uploading');
+
+// Stops the given uploads (all active ones when no ids are given) and discards anything already sent.
+export function cancel(ids) {
+  const targets = jobs.filter(job => (!ids || ids.includes(job.id)) && canCancel(job));
+  for (const job of targets) {
+    patch(job.id, { status: 'cancelled', error: '' });
+    if (job.id === currentId) controller?.abort();
+    if (job.uploadId) discard(job.uploadId);
+    if (job.kind === 'file') saved.remove(job.id);
+    job.resolve?.({ id: job.id, key: job.key, status: 'cancelled', error: '' });
+  }
+  return targets.length;
 }
 
 // Signing out cancels everything and removes saved files from this device.

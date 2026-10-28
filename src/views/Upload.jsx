@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, MessageSquarePlus, Plus, UploadCloud, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Ban, CheckCircle2, CloudOff, Copy, FileUp, Layers, Lightbulb, Link2, MessageSquarePlus, Plus, UploadCloud, X } from 'lucide-react';
 import { api } from '../api.js';
-import { enqueue, forget } from '../uploads.js';
+import { cancel, enqueue, forget } from '../uploads.js';
 import { makeThumbnail } from '../thumbnails.js';
 import { fingerprint } from '../textExtract.js';
 import { EMPTY_TAGS, detectVerses, refreshFacets } from '../components/Tags.jsx';
@@ -72,8 +72,11 @@ function Toggle({ label, hint, checked, disabled, onChange }) {
   );
 }
 
-function QueueItem({ item, index, locked, compact, cover, canCopy, onChange, onRemove, onCopyDescription }) {
+function QueueItem({ item, index, locked, compact, cover, canCopy, onChange, onRemove, onCancel, onCopyDescription }) {
   const done = item.status === 'done';
+  // While submitting, anything not yet finished can be cancelled (a link already being sent can't be stopped).
+  const cancellable = locked && !done && item.status !== 'error' && item.status !== 'cancelled'
+    && !(item.kind === 'link' && item.status === 'uploading');
   return (
     <li className={cx('rounded-xl border', compact ? 'p-2.5' : 'p-3 sm:p-4', done ? 'border-emerald-200 bg-emerald-50/50' : item.status === 'error' ? 'border-rose-200' : 'border-slate-200')}>
       <div className={cx('flex gap-3', compact ? 'items-center' : 'items-start')}>
@@ -112,8 +115,13 @@ function QueueItem({ item, index, locked, compact, cover, canCopy, onChange, onR
           )}
           {item.status === 'waiting' && <p className="flex items-center gap-1.5 text-xs text-amber-700"><CloudOff className="h-3.5 w-3.5 shrink-0" />Waiting for connection… it will continue automatically.</p>}
           {item.status === 'error' && <p className="flex items-center gap-1.5 text-xs text-rose-700"><AlertCircle className="h-3.5 w-3.5 shrink-0" />{item.error}</p>}
+          {item.status === 'cancelled' && <p className="flex items-center gap-1.5 text-xs text-slate-500"><Ban className="h-3.5 w-3.5 shrink-0" />Cancelled. Remove it, or upload again.</p>}
         </div>
-        {done ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" aria-label="Submitted" /> : !locked && (
+        {done ? <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" aria-label="Submitted" /> : cancellable ? (
+          <button type="button" onClick={onCancel} title="Cancel upload" className="rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label={`Cancel upload of ${item.title || 'item'}`}>
+            <X className="h-4 w-4" />
+          </button>
+        ) : !locked && (
           <button type="button" onClick={onRemove} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label={`Remove ${item.title || 'item'}`}>
             <X className="h-4 w-4" />
           </button>
@@ -154,6 +162,12 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const update = (key, patch) => setItems(list => list.map(item => (item.key === key ? { ...item, ...patch } : item)));
+  // Items cancelled before they reached the upload queue (e.g. the parts waiting for a card's cover).
+  const skipped = useRef(new Set());
+  const cancelItems = targets => {
+    targets.forEach(item => { skipped.current.add(item.key); update(item.key, { status: 'cancelled', progress: 0, error: '' }); });
+    cancel(targets.map(item => item.jobId).filter(Boolean));
+  };
   const thumbUrls = useRef(new Set());
   useEffect(() => () => thumbUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
 
@@ -261,11 +275,12 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       return {
         key: item.key, kind: item.kind, file: item.file, url: item.url, title: fields.title, thumbnail: item.thumb,
         fields,
-        onUpdate: ({ status, progress, error: message }) => update(item.key, {
-          status: status === 'queued' ? 'ready' : status, progress, error: status === 'error' ? message : '',
+        onUpdate: ({ id, status, progress, error: message }) => update(item.key, {
+          jobId: id, status: status === 'queued' ? 'ready' : status, progress, error: status === 'error' ? message : '',
         }),
       };
     };
+    skipped.current.clear();
     let parentId = parent?.id || (grouped ? groupId.current : null);
     let rest = pending;
     const results = [];
@@ -275,10 +290,12 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
       rest = pending.slice(1);
       if (first.status === 'done' && first.contentId) groupId.current = parentId = first.contentId;
     }
-    const cardFailed = grouped && !parentId;
-    if (!cardFailed) results.push(...await enqueue(rest.map(item => job(item, parentId))));
+    const coverCancelled = grouped && !parentId && results[0]?.status === 'cancelled';
+    const cardFailed = grouped && !parentId && !coverCancelled;
+    rest = rest.filter(item => !skipped.current.has(item.key));
+    if (!cardFailed && !coverCancelled) results.push(...await enqueue(rest.map(item => job(item, parentId))));
     const ok = results.filter(result => result.status === 'done').length;
-    const failed = results.length - ok;
+    const failed = results.filter(result => result.status === 'error').length;
     if (!mounted.current) return;
     forget(results.map(result => result.id));
     setBusy(false);
@@ -290,6 +307,8 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     } else if (failed) {
       setError(`${plural(failed, 'item')} could not be submitted. Fix and submit again.`);
       toast(`${plural(failed, 'item')} failed`, 'error');
+    } else if (!ok) {
+      toast('Upload cancelled');
     } else {
       setAsCard(grouped);
       setSubmitted(itemsRef.current.length - pending.length + ok);
@@ -444,6 +463,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
                   <QueueItem key={item.key} item={item} index={index} locked={busy} compact={useShared} canCopy={remaining.length > 1} cover={grouped && index === 0}
                     onChange={patch => update(item.key, patch)}
                     onRemove={() => setItems(list => list.filter(other => other.key !== item.key))}
+                    onCancel={() => cancelItems([item])}
                     onCopyDescription={() => setItems(list => list.map(other => (other.status === 'done' ? other : { ...other, description: item.description })))} />
                 ))}
               </ul>
@@ -454,6 +474,13 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-4 sm:px-6">
           {busy && <p className="mr-auto text-xs text-slate-500">You can leave this page. Uploads continue in the background.</p>}
+          {busy && (
+            <Button variant="secondary" icon={X}
+              onClick={() => cancelItems(items.filter(item => ['ready', 'uploading', 'waiting'].includes(item.status)
+                && !(item.kind === 'link' && item.status === 'uploading')))}>
+              <span className="hidden sm:inline">Cancel upload</span><span className="sm:hidden">Cancel</span>
+            </Button>
+          )}
           {!busy && <Button variant="secondary" onClick={() => navigate('library')}>Cancel</Button>}
           <Button type="submit" icon={UploadCloud} loading={busy} disabled={!remaining.length}>
             {busy ? 'Uploading…' : grouped && !anyDone ? 'Upload as one card' : remaining.length > 1 ? `Upload ${remaining.length} items` : 'Upload'}
