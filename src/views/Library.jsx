@@ -147,7 +147,7 @@ function SearchBox({ query, onQuery, pool, onPick, busy, placeholder }) {
   return (
     <div ref={box} className="relative min-w-0 flex-1 scroll-mt-[calc(4.5rem+env(safe-area-inset-top))]">
       {busy
-        ? <Loader2 className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 animate-spin text-brand-500" aria-label="Searching" />
+        ? <span className="pointer-events-none absolute left-3 top-1/2 z-10 flex h-4 w-4 -translate-y-1/2" aria-label="Searching"><Loader2 className="h-4 w-4 animate-spin text-brand-500" /></span>
         : <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />}
       <input className="input pl-9" type="search" placeholder={placeholder} aria-label="Search" autoComplete="off"
         role="combobox" aria-expanded={show} aria-controls="search-suggestions" aria-autocomplete="list"

@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.16
+
+- The searching spinner stays centred in the search box instead of slipping down while you type.
+
 ## 1.7.15
 
 - View counts now count every time content is opened, not just once per member. Existing views are kept.
