@@ -2,9 +2,13 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.18
+
+- Search now also finds cards by the titles and file names of the files inside them. The matching file is listed on the card (grid and list view) and in the suggestions, with the searched words highlighted. Accents are ignored as before.
+
 ## 1.7.17
 
-- Search ignores accents: "yada yada hi dharmasya" finds "yada yada hi dharmasya" (and the other way round) in titles, descriptions, tags and text inside documents. Snippets still show the original diacritics.
+- Search ignores accents: "yada yada hi dharmasya" finds "yadā yadā hi dharmasya" (and the other way round) in titles, descriptions, tags and text inside documents. Snippets still show the original diacritics.
 - Screen readers read the logo tagline as words.
 
 ## 1.7.16

@@ -11,6 +11,32 @@ const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, '')
 
 export const canShare = item => item.status === 'approved' && item.visibility !== 'private' && !item.parent_id;
 
+/** Files inside a card that matched the search, with the matching words highlighted. */
+export function MatchedParts({ item, className }) {
+  if (!item.matchedParts?.length) return null;
+  return (
+    <ul className={cx('mt-1 space-y-0.5', className)} aria-label="Matching files inside">
+      {item.matchedParts.map(part => {
+        const Icon = (TYPE_META[part.type] || TYPE_META.link).icon;
+        const pieces = [];
+        let at = 0;
+        for (const [start, end] of part.marks || []) {
+          pieces.push(part.text.slice(at, start), <mark key={start} className="rounded bg-brand-100 px-0.5 text-brand-800">{part.text.slice(start, end)}</mark>);
+          at = end;
+        }
+        pieces.push(part.text.slice(at));
+        return (
+          <li key={part.id} className="flex min-w-0 items-center gap-1 text-[11px] leading-snug text-slate-500" title={part.text}>
+            <Icon className="h-3 w-3 shrink-0 text-slate-400" />
+            <span className="truncate">{pieces}</span>
+          </li>
+        );
+      })}
+      {item.matchedPartsMore > 0 && <li className="pl-4 text-[11px] text-slate-400">+{item.matchedPartsMore} more inside</li>}
+    </ul>
+  );
+}
+
 // /s/<id> serves a link preview (title + thumbnail) to chat apps, then redirects into the app.
 export function contentLink(item) {
   return new URL(`/s/${encodeURIComponent(item.id)}`, window.location.origin).toString();
@@ -117,6 +143,7 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
         <h3 className="line-clamp-2 text-xs font-semibold leading-snug text-slate-900 sm:text-[13px]" title={item.title}>{item.title}</h3>
         {item.description && <p className="mt-0.5 hidden text-xs text-slate-500 sm:line-clamp-1">{item.description}</p>}
         {item.snippet && <p className="mt-1 line-clamp-2 text-[11px] italic leading-snug text-slate-500" title="Found inside the document">{item.snippet}</p>}
+        <MatchedParts item={item} />
         {showStatus && (
           <div className="mt-2"><Badge tone={STATUS_META[item.status].tone} className="px-1.5 py-0.5 text-[10px]">{STATUS_META[item.status].label}</Badge></div>
         )}

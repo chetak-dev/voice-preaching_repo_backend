@@ -582,14 +582,19 @@ export function createApp(overrides = {}) {
     // By default only titles, descriptions and uploader names are searched, which is fast. `in=all` also searches
     // tags, file names and the text inside documents. Accents are ignored on both sides (see fold.js).
     const deep = param('in') === 'all';
+    // Library cards also match on the files and links inside them (their titles, descriptions and file names).
+    const insideCards = scope === 'library' || scope === 'saved';
     for (const token of tokens) {
       const like = `%${likeEscape(token)}%`;
       const verse = token.match(/^(\d{1,2})[.:](\d{1,2})$/);
       where.push(`(coalesce(c.search_title, c.title) LIKE ? ESCAPE '\\' OR coalesce(c.search_body, c.description) LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\'
+        ${insideCards ? `OR EXISTS(SELECT 1 FROM content k WHERE k.parent_id = c.id AND k.status = 'approved'
+          AND (k.search_title LIKE ? ESCAPE '\\' OR k.search_body LIKE ? ESCAPE '\\' OR k.search_extra LIKE ? ESCAPE '\\'))` : ''}
         ${deep ? `OR c.search_extra LIKE ? ESCAPE '\\'
         OR EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id AND coalesce(x.folded, x.body) LIKE ? ESCAPE '\\')` : ''}
         ${verse ? "OR (',' || c.verses || ',') LIKE ? OR (',' || c.verses || ',') LIKE ?" : ''})`);
       params.push(like, like, like);
+      if (insideCards) params.push(like, like, like);
       if (deep) params.push(like, like);
       if (verse) params.push(`%,${Number(verse[1])}.${Number(verse[2])},%`, `%,${Number(verse[1])},%`);
     }
@@ -617,6 +622,35 @@ export function createApp(overrides = {}) {
       paged && offset === 0 ? db.all(`SELECT c.type, count(*) AS n ${from} WHERE ${base} GROUP BY c.type`, ...baseParams) : null,
     ]);
 
+    if (insideCards && tokens.length) {
+      // Shows which files inside a card matched, unless the card's own title already explains the match.
+      const cards = rows.filter(row => Number(row.parts) > 0 && !tokens.every(token => fold(row.title).includes(token)));
+      if (cards.length) {
+        const parts = await db.all(`SELECT id, parent_id, title, type, original_name, search_title, search_body, search_extra FROM content
+          WHERE status = 'approved' AND parent_id IN (${cards.map(() => '?').join(',')}) ORDER BY created_at`, ...cards.map(row => row.id));
+        for (const row of cards) {
+          const matched = parts.filter(part => part.parent_id === row.id
+            && tokens.some(token => [part.search_title, part.search_body, part.search_extra].some(value => value?.includes(token))));
+          if (matched.length) {
+            // The text shown is the part's title, or its file name when only that matched; `marks` are the ranges to highlight.
+            const marksIn = value => {
+              const { folded, map } = foldWithMap(value || '');
+              const ranges = tokens.map(token => [folded.indexOf(token), token.length])
+                .filter(([at]) => at >= 0)
+                .map(([at, length]) => [map[at], map[at + length]])
+                .sort((a, b) => a[0] - b[0]);
+              return ranges.filter((range, i) => !i || range[0] >= ranges[i - 1][1]);
+            };
+            row.matchedParts = matched.slice(0, 3).map(part => {
+              const inName = !marksIn(part.title).length && marksIn(part.original_name).length;
+              const text = inName ? part.original_name : part.title;
+              return { id: part.id, type: part.type, text, marks: marksIn(text) };
+            });
+            row.matchedPartsMore = Math.max(0, matched.length - 3);
+          }
+        }
+      }
+    }
     if (deep && tokens.length) {
       const withText = rows.filter(row => row.has_text && !tokens.some(token => fold(row.title).includes(token)));
       if (withText.length) {

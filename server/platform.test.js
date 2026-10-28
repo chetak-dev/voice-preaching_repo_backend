@@ -866,6 +866,23 @@ test('search ignores accents in titles, descriptions and document text', async (
   for (const id of [link.id, doc]) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
 });
 
+test('library search finds cards by the files inside them and marks the match', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const card = (await admin('/api/content', { method: 'POST', body: { title: 'Sunday programme', url: 'https://example.org/sunday' } })).json;
+  const part = (await admin('/api/content', { method: 'POST', body: { title: 'Kīrtana by Rādhā Mādhava team', url: 'https://example.org/kirtan', parentId: card.id } })).json;
+  const search = async q => (await user(`/api/content?scope=library&q=${encodeURIComponent(q)}&limit=10`)).json.items;
+  const found = (await search('radha madhava')).find(item => item.id === card.id);
+  assert.ok(found, 'the card is found by a title inside it');
+  assert.equal(found.matchedParts.length, 1);
+  const [match] = found.matchedParts;
+  assert.equal(match.id, part.id);
+  assert.deepEqual(match.marks.map(range => match.text.slice(...range)), ['Rādhā', 'Mādhava'], 'each matching word is marked in the original text');
+  assert.ok(!(await search('sunday')).find(item => item.id === card.id).matchedParts, 'no inside matches when the card title matches');
+  assert.ok(!(await user(`/api/content?scope=mine&q=radha&limit=10`)).json.items.some(item => item.id === card.id));
+  await admin(`/api/content/${card.id}`, { method: 'DELETE', body: REASON });
+});
+
 test('members are notified about reviews, removals and role changes, and can mark them read', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');

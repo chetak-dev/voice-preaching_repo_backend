@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Loader2, MessageSquarePlus, Search, Trash2, TrendingUp, Undo2, UploadCloud, User, X } from 'lucide-react';
 import { api } from '../api.js';
-import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
+import { ContentCard, ContentThumb, MatchedParts, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
 import { useEffect, useRef } from 'react';
 import {
   Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useToast,
@@ -60,6 +60,7 @@ function rank(item, q) {
   if (title.includes(q)) return 2;
   if (fold(item.uploader).includes(q)) return 3;
   if (fold(item.description).includes(q)) return 4;
+  if (item.matchedParts?.some(part => fold(part.text).includes(q))) return 5;
   return -1;
 }
 
@@ -179,7 +180,12 @@ function SearchBox({ query, onQuery, pool, onPick, busy, placeholder }) {
                     <span className="line-clamp-2 block break-words text-sm font-medium leading-snug text-slate-900">
                       <Highlight text={option.item ? option.item.title : option.text} query={q} />
                     </span>
-                    {option.kind === 'item' && <span className="block truncate text-xs text-slate-500">{meta.label} · {option.item.uploader}</span>}
+                    {option.kind === 'item' && (() => {
+                      const inside = !findFolded(option.item.title, q) && option.item.matchedParts?.find(part => findFolded(part.text, q));
+                      return inside
+                        ? <span className="block truncate text-xs text-slate-500">Inside: <Highlight text={inside.text} query={q} /></span>
+                        : <span className="block truncate text-xs text-slate-500">{meta.label} · {option.item.uploader}</span>;
+                    })()}
                     {option.kind === 'person' && <span className="block truncate text-xs text-slate-500">{option.count} {option.count === 1 ? 'item' : 'items'}</span>}
                   </span>
                   {option.kind === 'item' && <CornerDownLeft className={cx('h-4 w-4 shrink-0 text-slate-300', index !== active && 'invisible')} />}
@@ -549,6 +555,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                     <p className="mt-1 line-clamp-2 text-xs text-rose-700"><span className="font-medium">Reviewer note:</span> {item.review_note}</p>
                   )}
                   {item.snippet && <p className="mt-1 line-clamp-2 text-xs italic text-slate-500">{item.snippet}</p>}
+                  <MatchedParts item={item} className="[&_li]:text-xs" />
                   <div className="mt-1.5 flex items-center gap-2">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                       <Badge tone={meta.tone} icon={meta.icon}>{meta.label}</Badge>
