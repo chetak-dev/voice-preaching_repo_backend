@@ -23,6 +23,8 @@ function formatResumeTime(value) {
 const TITLES = { library: 'Library', saved: 'Saved', mine: 'My submissions' };
 
 const RECENT_KEY = 'voice.recentSearches';
+const DEEP_KEY = 'voice.searchInsideFiles';
+const CACHE_MS = 60_000;
 const SORT_KEY = 'voice.librarySort';
 const SORTS = {
   newest: { label: 'Newest', compare: (a, b) => (b.created_at > a.created_at ? 1 : b.created_at < a.created_at ? -1 : 0) },
@@ -67,11 +69,45 @@ function rank(item, q) {
   return -1;
 }
 
-function SearchBox({ query, onQuery, pool, onPick }) {
+function LayoutToggle({ layout, onChange, className }) {
+  return (
+    <div className={cx('shrink-0 rounded-xl bg-white p-1 ring-1 ring-inset ring-slate-200', className)}>
+      {[['grid', LayoutGrid], ['list', List]].map(([key, Icon]) => (
+        <button key={key} type="button" onClick={() => onChange(key)} aria-label={`${key} view`} aria-pressed={layout === key}
+          className={cx('rounded-lg p-1.5', layout === key ? 'bg-brand-50 text-brand-700' : 'text-slate-400 hover:text-slate-600')}>
+          <Icon className="h-4 w-4" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SearchBox({ query, onQuery, pool, onPick, busy, placeholder }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [recent, setRecent] = useState(loadRecent);
   const q = query.trim().toLowerCase();
+  const box = useRef(null);
+  const [room, setRoom] = useState(320);
+  // Suggestions use the space left between the search box and the on-screen keyboard.
+  useEffect(() => {
+    if (!open) return undefined;
+    const viewport = window.visualViewport;
+    const measure = () => {
+      const bottom = box.current?.getBoundingClientRect().bottom ?? 0;
+      const height = viewport ? viewport.height + viewport.offsetTop : window.innerHeight;
+      setRoom(Math.max(160, Math.min(420, height - bottom - 16)));
+    };
+    measure();
+    viewport?.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, { passive: true });
+    return () => { viewport?.removeEventListener('resize', measure); window.removeEventListener('scroll', measure); };
+  }, [open]);
+  function focused() {
+    setOpen(true);
+    // On phones, move the search box to the top so the suggestions are not hidden behind the keyboard.
+    if (window.matchMedia('(max-width: 639px)').matches) setTimeout(() => box.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 250);
+  }
 
   const options = useMemo(() => {
     if (!q) return recent.map(text => ({ kind: 'recent', key: `r:${text}`, text }));
@@ -117,13 +153,15 @@ function SearchBox({ query, onQuery, pool, onPick }) {
 
   const show = open && options.length > 0;
   return (
-    <div className="relative min-w-0 flex-1">
-      <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
-      <input className="input pl-9" type="search" placeholder="Search" aria-label="Search" autoComplete="off"
+    <div ref={box} className="relative min-w-0 flex-1 scroll-mt-[calc(4.5rem+env(safe-area-inset-top))]">
+      {busy
+        ? <Loader2 className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 animate-spin text-brand-500" aria-label="Searching" />
+        : <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />}
+      <input className="input pl-9" type="search" placeholder={placeholder} aria-label="Search" autoComplete="off"
         role="combobox" aria-expanded={show} aria-controls="search-suggestions" aria-autocomplete="list"
         aria-activedescendant={show && options[active] ? `suggestion-${active}` : undefined}
         value={query} onChange={e => { onQuery(e.target.value); setActive(-1); setOpen(true); }}
-        onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKeyDown} />
+        onFocus={focused} onBlur={() => setOpen(false)} onKeyDown={onKeyDown} />
       {show && (
         <div className="absolute inset-x-0 top-full z-30 mt-1.5 overflow-hidden rounded-xl bg-white shadow-xl ring-1 ring-slate-200">
           {!q && (
@@ -132,7 +170,7 @@ function SearchBox({ query, onQuery, pool, onPick }) {
               <button type="button" onMouseDown={e => e.preventDefault()} onClick={clearRecent} className="normal-case tracking-normal text-brand-600 hover:underline">Clear</button>
             </div>
           )}
-          <ul id="search-suggestions" role="listbox" aria-label="Suggestions" className="max-h-80 overflow-y-auto py-1">
+          <ul id="search-suggestions" role="listbox" aria-label="Suggestions" className="overflow-y-auto overscroll-contain py-1" style={{ maxHeight: room }}>
             {options.map((option, index) => {
               const meta = option.item && TYPE_META[option.item.type];
               const Icon = option.kind === 'recent' ? History : option.kind === 'person' ? User : meta.icon;
@@ -144,7 +182,7 @@ function SearchBox({ query, onQuery, pool, onPick }) {
                     <Icon className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-slate-900">
+                    <span className="line-clamp-2 block break-words text-sm font-medium leading-snug text-slate-900">
                       <Highlight text={option.item ? option.item.title : option.text} query={q} />
                     </span>
                     {option.kind === 'item' && <span className="block truncate text-xs text-slate-500">{meta.label} · {option.item.uploader}</span>}
@@ -178,7 +216,9 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   const toast = useToast();
   const home = scope === 'library';
   const [query, setQuery] = useState('');
-  const q = useDebounced(query.trim(), 300);
+  const q = useDebounced(query.trim(), 250);
+  const [deep, setDeep] = useState(() => { try { return localStorage.getItem(DEEP_KEY) === '1'; } catch { return false; } });
+  const changeDeep = value => { setDeep(value); try { localStorage.setItem(DEEP_KEY, value ? '1' : '0'); } catch { /* storage unavailable */ } };
   const [type, setType] = useState(() => {
     try {
       const picked = sessionStorage.getItem(LIBRARY_TYPE_KEY);
@@ -204,21 +244,35 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
   const params = useMemo(() => {
     const search = new URLSearchParams({ scope, sort });
     if (q) search.set('q', q);
+    if (q && deep) search.set('in', 'all');
     if (type !== 'all') search.set('type', type);
     if (scope === 'mine' && status !== 'all') search.set('status', status);
     for (const key of FILTER_KEYS) if (filters[key]) search.set(key, filters[key]);
     return search.toString();
-  }, [scope, sort, q, type, status, filters]);
+  }, [scope, sort, q, deep, type, status, filters]);
   const [list, setList] = useState({ params: null, items: [], total: 0, hasMore: false, counts: {}, loading: true, error: null });
   const [version, setVersion] = useState(0);
-  const reload = useCallback(() => setVersion(current => current + 1), []);
+  // Recent result pages, so going back to an earlier search or filter is instant.
+  const pageCache = useRef(null);
+  if (!pageCache.current) pageCache.current = new Map();
+  const reload = useCallback(() => { pageCache.current.clear(); setVersion(current => current + 1); }, []);
   useEffect(() => {
-    let live = true;
+    const show = result => setList({ params, items: result.items, total: result.total, hasMore: result.hasMore, counts: result.counts || {}, loading: false, error: null });
+    const cache = pageCache.current;
+    const cached = cache.get(params);
+    if (cached && Date.now() - cached.at < CACHE_MS) { show(cached.result); return undefined; }
+    // Typing quickly starts several searches; only the latest one is kept.
+    const controller = new AbortController();
     setList(current => ({ ...current, loading: true, error: null }));
-    api(`/content?${params}&limit=${PAGE_SIZE}&offset=0`)
-      .then(result => live && setList({ params, items: result.items, total: result.total, hasMore: result.hasMore, counts: result.counts || {}, loading: false, error: null }))
-      .catch(err => live && setList(current => ({ ...current, loading: false, error: err })));
-    return () => { live = false; };
+    api(`/content?${params}&limit=${PAGE_SIZE}&offset=0`, { signal: controller.signal })
+      .then(result => {
+        if (controller.signal.aborted) return;
+        cache.set(params, { at: Date.now(), result });
+        if (cache.size > 30) cache.delete(cache.keys().next().value);
+        show(result);
+      })
+      .catch(err => { if (!controller.signal.aborted) setList(current => ({ ...current, loading: false, error: err })); });
+    return () => controller.abort();
   }, [params, version]);
   const fetchingMore = useRef(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -369,8 +423,10 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
   return (
     <div>
-      <PageHeader title={TITLES[scope]}
-        actions={<Button icon={UploadCloud} onClick={() => navigate('upload')} className="hidden lg:inline-flex">Contribute</Button>} />
+      <div className="hidden lg:block">
+        <PageHeader title={TITLES[scope]}
+          actions={<Button icon={UploadCloud} onClick={() => navigate('upload')}>Contribute</Button>} />
+      </div>
 
       {continueItem && (
         <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-brand-100 bg-brand-50 p-4 sm:flex-row sm:items-center sm:justify-between" aria-label="Continue listening">
@@ -385,37 +441,56 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
       <div className="mb-5 space-y-3">
         <div className="flex items-center gap-2">
-          <SearchBox query={query} onQuery={setQuery} pool={filtered} onPick={openItem} />
+          <SearchBox query={query} onQuery={setQuery} pool={filtered} onPick={openItem} busy={loading && Boolean(q)}
+            placeholder={deep ? 'Search everything, even inside files' : 'Search titles & descriptions'} />
           {scope === 'mine' && (
             <select className="input hidden w-44 sm:block" value={status} onChange={e => setStatus(e.target.value)} aria-label="Filter by status">
               <option value="all">All statuses</option>
               {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
             </select>
           )}
-          <label className="relative flex shrink-0 self-stretch" title="Sort">
-            <span className="flex w-[42px] items-center justify-center rounded-xl bg-white text-slate-500 ring-1 ring-inset ring-slate-200 sm:hidden" aria-hidden="true">
-              <ArrowDownWideNarrow className="h-4 w-4" />
-            </span>
-            <ArrowDownWideNarrow className="pointer-events-none absolute left-3 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-slate-400 sm:block" />
-            <select className="input absolute inset-0 h-full w-full cursor-pointer opacity-0 sm:static sm:w-40 sm:pl-9 sm:opacity-100" value={sort}
-              onChange={e => changeSort(e.target.value)} aria-label="Sort by">
+          <div className="relative hidden shrink-0 sm:block">
+            <ArrowDownWideNarrow className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <select className="input w-40 pl-9" value={sort} onChange={e => changeSort(e.target.value)} aria-label="Sort by">
               {Object.entries(SORTS).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
             </select>
-          </label>
-          <div className="flex shrink-0 rounded-xl bg-white p-1 ring-1 ring-inset ring-slate-200">
-            {[['grid', LayoutGrid], ['list', List]].map(([key, Icon]) => (
-              <button key={key} type="button" onClick={() => setLayout(key)} aria-label={`${key} view`} aria-pressed={layout === key}
-                className={cx('rounded-lg p-1.5', layout === key ? 'bg-brand-50 text-brand-700' : 'text-slate-400 hover:text-slate-600')}>
-                <Icon className="h-4 w-4" />
-              </button>
-            ))}
           </div>
+          <LayoutToggle layout={layout} onChange={setLayout} className="hidden sm:flex" />
+        </div>
+        {/* Phones: content type, sort and layout share one row under the full-width search box. */}
+        <div className="flex items-center gap-2 sm:hidden">
+          <select className="input min-w-0 flex-1" value={type} onChange={e => setType(e.target.value)} aria-label="Content type">
+            {['all', ...Object.keys(TYPE_META)].map(key => (
+              <option key={key} value={key}>{key === 'all' ? 'All types' : TYPE_META[key].plural} ({key === 'all' ? countAll : counts[key] || 0})</option>
+            ))}
+          </select>
+          <div className="relative min-w-0 flex-1">
+            <ArrowDownWideNarrow className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <select className="input w-full pl-9" value={sort} onChange={e => changeSort(e.target.value)} aria-label="Sort by">
+              {Object.entries(SORTS).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
+            </select>
+          </div>
+          <LayoutToggle layout={layout} onChange={setLayout} className="flex" />
         </div>
         {scope === 'mine' && (
           <select className="input sm:hidden" value={status} onChange={e => setStatus(e.target.value)} aria-label="Filter by status">
             <option value="all">All statuses</option>
             {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
           </select>
+        )}
+        {query.trim() && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>Search in</span>
+            <div className="flex rounded-full bg-white p-0.5 ring-1 ring-inset ring-slate-200" role="radiogroup" aria-label="Search in">
+              {[[false, 'Title & description'], [true, 'Inside files too']].map(([value, label]) => (
+                <button key={label} type="button" role="radio" aria-checked={deep === value} onClick={() => changeDeep(value)}
+                  className={cx('rounded-full px-3 py-1 font-medium transition', deep === value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900')}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {deep && <span className="text-slate-400">Slower: also reads the text inside documents.</span>}
+          </div>
         )}
         {activeFilters > 0 && (
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-200 sm:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
@@ -444,7 +519,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
               className="col-span-2 justify-self-end sm:col-span-1 sm:self-center">Clear</Button>
           </div>
         )}
-        <div className="no-scrollbar flex gap-1.5 overflow-x-auto">
+        <div className="no-scrollbar hidden gap-1.5 overflow-x-auto sm:flex">
           {['all', ...Object.keys(TYPE_META)].map(key => (
             <button key={key} type="button" onClick={() => setType(key)}
               className={cx('whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition active:scale-95',
@@ -557,34 +632,46 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
 const CONFIRM_WORD = 'REMOVE';
 
-export function RemoveContentModal({ item, onClose, onRemoved }) {
+// Removes one item, or several at once when `items` is given (site admins clearing duplicates).
+export function RemoveContentModal({ item, items, defaultReason = '', onClose, onRemoved }) {
   const toast = useToast();
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState(defaultReason);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setReason(''); setTyped(''); }, [item?.id]);
+  const many = items?.length ? items : null;
+  const key = many ? many.map(entry => entry.id).join() : item?.id;
+  useEffect(() => { setReason(defaultReason); setTyped(''); }, [key, defaultReason]);
   const ready = reason.trim().length >= 5 && typed.trim() === CONFIRM_WORD;
   async function submit(event) {
     event.preventDefault();
     if (!ready || busy) return;
     setBusy(true);
     try {
-      await api(`/content/${item.id}`, { method: 'DELETE', body: { reason: reason.trim() } });
-      onRemoved();
+      if (many) onRemoved(await api('/content/bulk-remove', { method: 'POST', body: { ids: many.map(entry => entry.id), reason: reason.trim() } }));
+      else { await api(`/content/${item.id}`, { method: 'DELETE', body: { reason: reason.trim() } }); onRemoved(); }
     } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   }
   return (
-    <Modal open={Boolean(item)} onClose={busy ? () => {} : onClose} size="sm" title="Remove content permanently?"
+    <Modal open={Boolean(many || item)} onClose={busy ? () => {} : onClose} size="sm" title={many ? `Remove ${many.length} ${many.length === 1 ? 'item' : 'items'} permanently?` : 'Remove content permanently?'}
       footer={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="danger" icon={Trash2} type="submit" form="remove-content-form" loading={busy} disabled={!ready}>Remove</Button>
+          <Button variant="danger" icon={Trash2} type="submit" form="remove-content-form" loading={busy} disabled={!ready}>{many ? `Remove ${many.length}` : 'Remove'}</Button>
         </>
       )}>
-      {item && (
+      {(many || item) && (
         <form id="remove-content-form" onSubmit={submit} className="space-y-4">
           <div className="rounded-xl bg-rose-50 px-3.5 py-3 text-sm text-rose-800">
-            <p><span className="font-semibold">{item.title}</span> will be deleted from the library and from Google Drive{item.parts > 0 ? `, together with the ${item.parts} ${item.parts === 1 ? 'file' : 'files'} added to it` : ''}. This cannot be undone.</p>
+            {many ? (
+              <>
+                <p>These will be deleted from the library and from Google Drive, with any files added to them. This cannot be undone.</p>
+                <ul className="mt-2 max-h-32 list-disc space-y-0.5 overflow-y-auto pl-5 text-xs">
+                  {many.map(entry => <li key={entry.id} className="break-words">{entry.title}</li>)}
+                </ul>
+              </>
+            ) : (
+              <p><span className="font-semibold">{item.title}</span> will be deleted from the library and from Google Drive{item.parts > 0 ? `, together with the ${item.parts} ${item.parts === 1 ? 'file' : 'files'} added to it` : ''}. This cannot be undone.</p>
+            )}
           </div>
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-slate-700">Reason for removing</span>

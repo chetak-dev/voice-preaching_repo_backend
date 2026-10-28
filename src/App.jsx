@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Bell, Bookmark, ChevronDown, ClipboardCheck, CloudDownload, CopyCheck, CloudOff, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, MessageSquarePlus, Monitor,
-  Moon, PieChart, Plus, RefreshCw, Share, Sun, Trophy, UploadCloud, Users, X,
+  Moon, Pencil, PieChart, Plus, RefreshCw, Share, Sun, Trophy, UploadCloud, Users, X,
 } from 'lucide-react';
 import { api } from './api.js';
 import { useNotifications } from './notifications.js';
@@ -23,6 +23,7 @@ import Library from './views/Library.jsx';
 import Leaderboard from './views/Leaderboard.jsx';
 import Legal, { LEGAL_PAGES } from './views/Legal.jsx';
 import Login from './views/Login.jsx';
+import PublicView, { PENDING_CONTENT_KEY } from './views/PublicView.jsx';
 import Members from './views/Members.jsx';
 import Overview from './views/Overview.jsx';
 import Review from './views/Review.jsx';
@@ -106,7 +107,49 @@ function PointsPill({ points, onClick, light }) {
   );
 }
 
-function ProfileMenu({ user, points, onLeaderboard, onSignOut, light }) {
+function EditNameModal({ open, user, onClose, onSaved }) {
+  const toast = useToast();
+  const [name, setName] = useState(user.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { if (open) { setName(user.name); setError(''); } }, [open, user.name]);
+  const clean = name.trim().replace(/\s+/g, ' ');
+  const ready = clean.length >= 2 && clean.length <= 100 && clean !== user.name;
+  async function save(event) {
+    event.preventDefault();
+    if (!ready) return;
+    setBusy(true);
+    setError('');
+    try {
+      const { user: updated } = await api('/auth/me', { method: 'PATCH', body: { name: clean } });
+      onSaved(updated);
+      toast('Your name has been updated.');
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal open={open} onClose={busy ? () => {} : onClose} size="sm" title="Your name"
+      description="This is shown on everything you contribute."
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button type="submit" form="edit-name-form" loading={busy} disabled={!ready}>Save</Button>
+        </>
+      )}>
+      <form id="edit-name-form" onSubmit={save}>
+        <label className="label" htmlFor="profile-name">Name</label>
+        <input id="profile-name" className="input" value={name} onChange={e => setName(e.target.value)} maxLength={100} autoComplete="name" autoFocus />
+        {error && <p className="mt-2 text-sm text-rose-600">{error}</p>}
+      </form>
+    </Modal>
+  );
+}
+
+function ProfileMenu({ user, points, onLeaderboard, onEditName, onSignOut, light }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const role = ROLE_META[user.role];
@@ -146,6 +189,10 @@ function ProfileMenu({ user, points, onLeaderboard, onSignOut, light }) {
             </div>
           </div>
           <div className="space-y-3 border-t border-slate-200 px-4 py-3">
+            <button type="button" role="menuitem" onClick={close(onEditName)}
+              className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-sm text-slate-700 transition hover:bg-slate-50">
+              <Pencil className="h-4 w-4 text-brand-600" />Edit name
+            </button>
             <button type="button" role="menuitem" onClick={close(onLeaderboard)}
               className="flex w-full items-center justify-between rounded-xl px-2 py-1.5 text-sm text-slate-700 transition hover:bg-slate-50">
               <span className="flex items-center gap-2"><Trophy className="h-4 w-4 text-amber-500" />Points</span>
@@ -165,10 +212,15 @@ function ProfileMenu({ user, points, onLeaderboard, onSignOut, light }) {
   );
 }
 
-function Shell({ user, config, onSignOut }) {
+function Shell({ user, config, onSignOut, onUserChanged }) {
   const toast = useToast();
+  const [editingName, setEditingName] = useState(false);
   const [view, setView] = useState(currentHash);
-  const [sharedContentId] = useState(() => new URLSearchParams(window.location.search).get('content'));
+  const [sharedContentId] = useState(() => {
+    const id = new URLSearchParams(window.location.search).get('content') || sessionStorage.getItem(PENDING_CONTENT_KEY);
+    sessionStorage.removeItem(PENDING_CONTENT_KEY);
+    return id;
+  });
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pending, setPending] = useState(0);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
@@ -356,7 +408,7 @@ function Shell({ user, config, onSignOut }) {
             <Bell className="h-5 w-5" />
             <CountBadge value={notifications.unread} className="absolute -right-0.5 -top-0.5 ring-2 ring-voice" />
           </button>
-          <ProfileMenu light user={user} points={points} onLeaderboard={() => navigate('leaderboard')} onSignOut={askSignOut} />
+          <ProfileMenu light user={user} points={points} onLeaderboard={() => navigate('leaderboard')} onEditName={() => setEditingName(true)} onSignOut={askSignOut} />
         </div>
       </header>
 
@@ -372,10 +424,10 @@ function Shell({ user, config, onSignOut }) {
               <CountBadge value={notifications.unread} className="absolute right-0.5 top-0.5 ring-2 ring-white" />
             </button>
             <span className="h-6 w-px bg-slate-200" aria-hidden="true" />
-            <ProfileMenu user={user} points={points} onLeaderboard={() => navigate('leaderboard')} onSignOut={askSignOut} />
+            <ProfileMenu user={user} points={points} onLeaderboard={() => navigate('leaderboard')} onEditName={() => setEditingName(true)} onSignOut={askSignOut} />
           </div>
         </header>
-        <main key={active} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-8">{page}</main>
+        <main key={`${active}:${user.name}`} className="mx-auto max-w-7xl animate-fade-in px-4 pb-28 pt-5 sm:px-6 lg:px-10 lg:pb-12 lg:pt-8">{page}</main>
       </div>
       {active !== 'upload' && <UploadTray />}
 
@@ -420,7 +472,11 @@ function Shell({ user, config, onSignOut }) {
             <div className="flex shrink-0 items-center gap-4 border-b border-slate-100 px-5 pb-4 pt-3 sm:pt-5">
               <Avatar name={user.name} size="lg" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-semibold text-slate-900">{user.name}</p>
+                <button type="button" onClick={() => { closeSheet(); setEditingName(true); }} aria-label="Edit name"
+                  className="group flex max-w-full items-center gap-1.5 text-left">
+                  <span className="truncate text-base font-semibold text-slate-900">{user.name}</span>
+                  <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-brand-600" />
+                </button>
                 <p className="truncate text-sm text-slate-500">{user.email}</p>
                 <Badge tone={role.tone} className="mt-1.5">{role.label}</Badge>
               </div>
@@ -470,6 +526,8 @@ function Shell({ user, config, onSignOut }) {
         </ol>
       </Modal>
 
+      <EditNameModal open={editingName} user={user} onClose={() => setEditingName(false)} onSaved={onUserChanged} />
+
       <Modal open={confirmSignOut} onClose={closeSignOut} size="sm" title="Sign out?"
         footer={(
           <>
@@ -511,6 +569,8 @@ function OfflineShell({ onRetry }) {
 function Root() {
   const [state, setState] = useState({ loading: true, user: null, config: null, offline: false });
   const [hash, setHash] = useState(currentHash);
+  const [sharedId] = useState(() => new URLSearchParams(window.location.search).get('content'));
+  const [wantsSignIn, setWantsSignIn] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -549,8 +609,15 @@ function Root() {
   if (LEGAL_PAGES.includes(hash)) return <Legal page={hash} signedIn={Boolean(state.user)} />;
   if (state.loading) return <SplashLoader />;
   if (!state.user && state.offline) return <OfflineShell onRetry={load} />;
-  if (!state.user) return <Login config={state.config} onSignedIn={load} />;
-  return <Shell user={state.user} config={state.config} onSignOut={signOut} />;
+  if (!state.user && sharedId && !wantsSignIn) {
+    return <PublicView contentId={sharedId} onSignIn={mode => { window.location.hash = `/${mode}`; setWantsSignIn(true); }} />;
+  }
+  if (!state.user) {
+    return <Login config={state.config} onSignedIn={load}
+      onBack={sharedId ? () => { sessionStorage.removeItem(PENDING_CONTENT_KEY); window.location.hash = '/library'; setWantsSignIn(false); } : undefined} />;
+  }
+  return <Shell user={state.user} config={state.config} onSignOut={signOut}
+    onUserChanged={user => setState(current => ({ ...current, user: { ...current.user, ...user } }))} />;
 }
 
 export default function App() {

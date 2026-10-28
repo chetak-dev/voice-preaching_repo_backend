@@ -245,6 +245,15 @@ export function createApp(overrides = {}) {
   }));
   app.get('/api/health', (req, res) => res.json({ ok: true }));
   app.get('/api/auth/me', authenticated, (req, res) => res.json({ user: publicUser(req.user) }));
+  // Uploads show the uploader's current name, so a change appears on every card they contributed.
+  app.patch('/api/auth/me', authenticated, h(async (req, res) => {
+    const name = text(req.body.name, 'Name', 100, 2).replace(/\s+/g, ' ');
+    if (name !== req.user.name) {
+      await db.run('UPDATE users SET name = ? WHERE id = ?', name, req.user.id);
+      await audit(db, req.user.id, 'Changed name', `${req.user.name} → ${name}`);
+    }
+    res.json({ user: publicUser({ ...req.user, name }) });
+  }));
   app.post('/api/auth/logout', authenticated, h(async (req, res) => {
     await db.run('DELETE FROM sessions WHERE token_hash = ?', hash(cookie(req, 'voice_session')));
     res.clearCookie('voice_session', cookieOptions);
@@ -366,7 +375,7 @@ export function createApp(overrides = {}) {
   }));
 
   // Shared links (/s/:id) give chat apps a title and thumbnail to preview, then send people into the app.
-  // Only approved public uploads reveal anything; viewing the content itself still requires signing in.
+  // Only approved public uploads reveal anything. Anyone with the link can view and download them.
   const shareLimiter = rateLimit({ windowMs: 60_000, limit: 120, legacyHeaders: false });
   const sharedItem = async id => {
     await db.ready;
@@ -408,6 +417,61 @@ export function createApp(overrides = {}) {
     if (!cronAuthorized(req.get('authorization'), config.cronSecret)) throw fail(401, 'Unauthorized.');
     const record = await createBackup({ db, config });
     res.status(record.ok ? 200 : 500).json(record.ok ? { ok: true } : { ok: false, error: record.error });
+  }));
+
+  async function sendFile(item, req, res, inline) {
+    const file = await storage.read(item, req.get('range'));
+    const name = encodeURIComponent(item.original_name || item.title).replace(/'/g, '%27');
+    const previewable = Boolean(MIME_TYPES[item.mime]);
+    res.set('Content-Disposition', `${previewable && inline ? 'inline' : 'attachment'}; filename*=UTF-8''${name}`);
+    res.set('X-Frame-Options', 'SAMEORIGIN');
+    if (!previewable) res.set('Content-Security-Policy', 'sandbox');
+    res.type(item.mime || 'application/octet-stream');
+    res.set('Accept-Ranges', 'bytes');
+    const length = file.contentLength ?? file.headers?.get('content-length');
+    const range = file.contentRange ?? file.headers?.get('content-range');
+    if (length != null) res.set('Content-Length', String(length));
+    if (range) res.set('Content-Range', range);
+    if (file.status === 416) return res.status(416).end();
+    res.status(file.status);
+    await pipeline(file.stream, res);
+  }
+
+  // Guests who open a shared link can view an approved public upload (and the approved files inside it) without an
+  // account, and download its files.
+  const guestLimiter = rateLimit({ windowMs: 60_000, limit: 600, legacyHeaders: false, skip: req => Boolean(req.user), message: { error: 'Too many requests. Please try again in a minute.' } });
+  const GUEST_FIELDS = ['id', 'title', 'description', 'type', 'mime', 'original_name', 'size', 'url', 'created_at', 'parent_id', 'uploader', 'has_thumb'];
+  const guestView = row => ({ ...Object.fromEntries(GUEST_FIELDS.map(key => [key, row[key] ?? null])), status: 'approved', visibility: 'public', guest: true });
+  async function guestItem(id) {
+    if (typeof id !== 'string' || id.length > 80) return null;
+    const item = await db.get(`SELECT c.*, u.name AS uploader, EXISTS(SELECT 1 FROM thumbnails t WHERE t.content_id = c.id) AS has_thumb
+      FROM content c JOIN users u ON u.id = c.uploader_id
+      WHERE c.id = ? AND c.status = 'approved' AND c.visibility = 'public' AND c.deletion_token IS NULL`, id);
+    if (!item || !item.parent_id) return item || null;
+    const parent = await db.get(`SELECT id FROM content WHERE id = ? AND status = 'approved' AND visibility = 'public' AND parent_id IS NULL`, item.parent_id);
+    return parent ? item : null;
+  }
+  app.get('/api/public/content/:id', guestLimiter, h(async (req, res) => {
+    const item = await guestItem(req.params.id);
+    if (!item || item.parent_id) throw fail(404, 'This content is unavailable or private.');
+    const parts = await db.all(`SELECT c.*, u.name AS uploader, EXISTS(SELECT 1 FROM thumbnails t WHERE t.content_id = c.id) AS has_thumb
+      FROM content c JOIN users u ON u.id = c.uploader_id
+      WHERE c.parent_id = ? AND c.status = 'approved' AND c.visibility = 'public' AND c.deletion_token IS NULL ORDER BY c.created_at`, item.id);
+    res.json({ item: guestView(item), parts: parts.map(guestView) });
+  }));
+  app.get('/api/content/:id/file', guestLimiter, h(async (req, res, next) => {
+    if (req.user) return next();
+    const item = await guestItem(req.params.id);
+    if (!item?.storage_key) throw fail(404, 'Content not found.');
+    await sendFile(item, req, res, req.query.inline === '1');
+  }));
+  app.get('/api/content/:id/thumbnail', guestLimiter, h(async (req, res, next) => {
+    if (req.user) return next();
+    const item = await guestItem(req.params.id);
+    const thumb = item && await db.get('SELECT mime, data FROM thumbnails WHERE content_id = ?', item.id);
+    if (!thumb) throw fail(404, 'No thumbnail yet.');
+    res.set('Cache-Control', 'private, max-age=86400');
+    res.type(thumb.mime).send(Buffer.from(thumb.data));
   }));
 
   app.use('/api', authenticated);
@@ -509,14 +573,18 @@ export function createApp(overrides = {}) {
     }
     const q = param('q').slice(0, 100);
     const tokens = [...new Set(q.toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 8);
+    // By default only titles, descriptions and uploader names are searched, which is fast. `in=all` also searches
+    // tags, file names and the text inside documents.
+    const deep = param('in') === 'all';
     for (const token of tokens) {
       const like = `%${likeEscape(token)}%`;
       const verse = token.match(/^(\d{1,2})[.:](\d{1,2})$/);
       where.push(`(c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\'
-        OR c.speaker LIKE ? ESCAPE '\\' OR c.topics LIKE ? ESCAPE '\\' OR c.original_name LIKE ? ESCAPE '\\'
-        OR EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id AND x.body LIKE ? ESCAPE '\\')
+        ${deep ? `OR c.speaker LIKE ? ESCAPE '\\' OR c.topics LIKE ? ESCAPE '\\' OR c.original_name LIKE ? ESCAPE '\\'
+        OR EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id AND x.body LIKE ? ESCAPE '\\')` : ''}
         ${verse ? "OR (',' || c.verses || ',') LIKE ? OR (',' || c.verses || ',') LIKE ?" : ''})`);
-      params.push(like, like, like, like, like, like, like);
+      params.push(like, like, like);
+      if (deep) params.push(like, like, like, like);
       if (verse) params.push(`%,${Number(verse[1])}.${Number(verse[2])},%`, `%,${Number(verse[1])},%`);
     }
     // Type counts ignore the type filter so the chips show how many of each kind match.
@@ -535,9 +603,15 @@ export function createApp(overrides = {}) {
     const paged = Number.isInteger(limit) && limit > 0;
     const offset = Math.max(0, Number.parseInt(param('offset'), 10) || 0);
     const page = paged ? ` LIMIT ${Math.min(limit, 100)} OFFSET ${offset}` : '';
-    const rows = await db.all(`${contentQuery} WHERE ${filter} ORDER BY ${relevance}${orders[sort]}${page}`, req.user.id, ...params, ...orderParams);
+    const from = 'FROM content c JOIN users u ON u.id = c.uploader_id';
+    // The page, the total and the per-type counts are independent, so they are fetched together.
+    const [rows, totalRow, typeRows] = await Promise.all([
+      db.all(`${contentQuery} WHERE ${filter} ORDER BY ${relevance}${orders[sort]}${page}`, req.user.id, ...params, ...orderParams),
+      paged ? db.get(`SELECT count(*) AS n ${from} WHERE ${filter}`, ...params) : null,
+      paged && offset === 0 ? db.all(`SELECT c.type, count(*) AS n ${from} WHERE ${base} GROUP BY c.type`, ...baseParams) : null,
+    ]);
 
-    if (tokens.length) {
+    if (deep && tokens.length) {
       const withText = rows.filter(row => row.has_text && !tokens.some(token => row.title.toLowerCase().includes(token)));
       if (withText.length) {
         const bodies = await db.all(`SELECT content_id, body FROM content_text WHERE content_id IN (${withText.map(() => '?').join(',')})`, ...withText.map(row => row.id));
@@ -558,9 +632,7 @@ export function createApp(overrides = {}) {
         if (match) row.duplicateOf = { id: match.id, title: match.title, status: match.status };
       }
     }
-    const from = 'FROM content c JOIN users u ON u.id = c.uploader_id';
-    const total = paged ? Number(await count(`SELECT count(*) AS n ${from} WHERE ${filter}`, ...params)) : rows.length;
-    const typeRows = paged && offset === 0 ? await db.all(`SELECT c.type, count(*) AS n ${from} WHERE ${base} GROUP BY c.type`, ...baseParams) : null;
+    const total = paged ? Number(totalRow.n) : rows.length;
     res.json({
       items: rows.map(strip), total, hasMore: paged ? offset + rows.length < total : false,
       ...(typeRows ? { counts: Object.fromEntries(typeRows.map(row => [row.type, Number(row.n)])) } : {}),
@@ -1105,6 +1177,31 @@ export function createApp(overrides = {}) {
     await audit(db, req.user.id, 'Deleted content', `${item.title} — Reason: ${reason}`);
     res.json({ ok: true });
   }));
+  // Site admins clearing duplicates remove several uploads with one reason. Each is removed on its own, so one
+  // failure (for example an unreachable Drive) doesn't stop the rest.
+  app.post('/api/content/bulk-remove', siteAdmin, h(async (req, res) => {
+    const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids)] : [];
+    if (!ids.length || ids.length > 50 || ids.some(id => typeof id !== 'string' || id.length > 80)) throw fail(400, 'Choose between 1 and 50 items.');
+    const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : '';
+    if (reason.length < 5) throw fail(400, 'Write a reason (at least 5 characters) before removing content.');
+    if (reason.length > 500) throw fail(400, 'Keep the reason under 500 characters.');
+    let removed = 0;
+    const failed = [];
+    for (const id of ids) {
+      const item = await db.get(`${contentQuery} WHERE c.id = ?`, req.user.id, id);
+      // Already gone, e.g. because it was inside another selected upload.
+      if (!item) continue;
+      try {
+        await removeContent(item);
+        removed += 1;
+        if (item.uploader_id !== req.user.id) await notify(item.uploader_id, 'removed', `Removed: ${item.title}`, reason);
+        await audit(db, req.user.id, 'Deleted content', `${item.title} — Reason: ${reason}`);
+      } catch (error) {
+        failed.push({ id, title: item.title, error: error.expose ? error.message : 'Could not be removed.' });
+      }
+    }
+    res.json({ removed, failed });
+  }));
   // Contributors can take back their own submission while it is still waiting for review.
   app.post('/api/content/:id/withdraw', h(async (req, res) => {
     const { item } = await getContent(req);
@@ -1184,21 +1281,7 @@ export function createApp(overrides = {}) {
   app.get('/api/content/:id/file', h(async (req, res) => {
     const { item } = await getContent(req);
     if (!item.storage_key) throw fail(404, 'This contribution is a link, not a file.');
-    const file = await storage.read(item, req.get('range'));
-    const name = encodeURIComponent(item.original_name || item.title).replace(/'/g, '%27');
-    const previewable = Boolean(MIME_TYPES[item.mime]);
-    res.set('Content-Disposition', `${previewable && req.query.inline === '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${name}`);
-    res.set('X-Frame-Options', 'SAMEORIGIN');
-    if (!previewable) res.set('Content-Security-Policy', 'sandbox');
-    res.type(item.mime || 'application/octet-stream');
-    res.set('Accept-Ranges', 'bytes');
-    const length = file.contentLength ?? file.headers?.get('content-length');
-    const range = file.contentRange ?? file.headers?.get('content-range');
-    if (length != null) res.set('Content-Length', String(length));
-    if (range) res.set('Content-Range', range);
-    if (file.status === 416) return res.status(416).end();
-    res.status(file.status);
-    await pipeline(file.stream, res);
+    await sendFile(item, req, res, req.query.inline === '1');
   }));
   app.get('/api/users', siteAdmin, h(async (req, res) => {
     const users = await db.all(`SELECT u.*, (SELECT COUNT(*) FROM content c WHERE c.uploader_id = u.id) AS uploads

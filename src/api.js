@@ -5,7 +5,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function api(path, { method = 'GET', body, form } = {}) {
+export async function api(path, { method = 'GET', body, form, signal } = {}) {
   let response;
   try {
     response = await fetch(`/api${path}`, {
@@ -13,8 +13,10 @@ export async function api(path, { method = 'GET', body, form } = {}) {
       credentials: 'same-origin',
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: form || (body ? JSON.stringify(body) : undefined),
+      signal,
     });
-  } catch {
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
     throw new ApiError('Network error. Check your connection and try again.', 0);
   }
   const data = await response.json().catch(() => ({}));

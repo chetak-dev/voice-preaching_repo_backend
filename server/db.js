@@ -165,6 +165,7 @@ export function openDatabase({ url, authToken, directory }) {
     ]);
     await client.execute('CREATE INDEX IF NOT EXISTS content_parent ON content(parent_id, created_at)');
     await client.execute('CREATE INDEX IF NOT EXISTS content_fingerprint ON content(fingerprint)');
+    await client.execute('CREATE INDEX IF NOT EXISTS content_uploader ON content(uploader_id, created_at)');
     await addColumns('uploads', [
       ['chunk_lock', 'TEXT'],
       ['chunk_lock_expires', 'INTEGER'],

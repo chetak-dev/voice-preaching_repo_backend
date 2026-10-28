@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { fileUrl, thumbnailUrl } from '../api.js';
 import { loadPdfjs } from '../thumbnails.js';
@@ -122,12 +122,71 @@ function TextViewer({ item }) {
   return <pre className={cx(frame, 'whitespace-pre-wrap break-words p-4 text-xs leading-relaxed text-slate-800')}>{text || 'This file is empty.'}</pre>;
 }
 
+const isPptx = item => /presentationml\.presentation/.test(item.mime || '') || /\.pptx$/i.test(item.original_name || '');
+
+// Draws the real slides (layout, pictures, shapes and colours) instead of only their text.
+function SlideDeck({ blob, onFail }) {
+  const box = useRef(null);
+  const host = useRef(null);
+  const [width, setWidth] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!box.current) return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      // Re-render only on real size changes, not on every pixel of a resize.
+      const next = Math.max(240, Math.min(960, Math.floor(entry.contentRect.width / 16) * 16));
+      setWidth(current => (current === next ? current : next));
+    });
+    observer.observe(box.current);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!width || !host.current) return undefined;
+    let live = true;
+    let viewer;
+    const el = host.current;
+    el.innerHTML = '';
+    setReady(false);
+    Promise.all([import('pptx-preview'), blob.arrayBuffer(), import('../officePreview.js').then(m => m.deckLayout(blob)).catch(() => null)])
+      .then(async ([{ init }, data, layout]) => {
+        if (!live) return;
+        viewer = init(el, { width, height: Math.round(width * 9 / 16), mode: 'list' });
+        await viewer.preview(data);
+        if (!live) return;
+        const wrapper = el.querySelector('.pptx-preview-wrapper');
+        const drawn = wrapper ? [...wrapper.children].filter(node => node.classList.contains('pptx-preview-slide-wrapper')) : [];
+        if (!drawn.length) throw new Error('empty');
+        // The renderer draws slides in file order and includes hidden ones; match what the presenter would show.
+        if (layout?.show.length && drawn.length === layout.files.length) {
+          drawn.forEach(node => node.remove());
+          layout.show.forEach(name => wrapper.appendChild(drawn[layout.files.indexOf(name)]));
+        }
+        setCount(wrapper.children.length);
+        setReady(true);
+      })
+      .catch(() => live && onFail());
+    return () => { live = false; try { viewer?.destroy?.(); } catch { /* already gone */ } };
+  }, [blob, width, onFail]);
+  return (
+    <div className={cx(frame, 'p-2 sm:p-3')}>
+      <div ref={box} className="mx-auto max-w-[960px]">
+        {!ready && <Loading label="Drawing slides…" />}
+        <div ref={host} className={cx('kt-slides mx-auto', !ready && 'h-0 overflow-hidden')} style={{ width }} />
+        {ready && <p className="mt-2 text-center text-xs text-slate-500">{count} slide{count === 1 ? '' : 's'}</p>}
+      </div>
+    </div>
+  );
+}
+
 function OfficeViewer({ item }) {
   const { blob, error } = useFile(item, true);
   const [doc, setDoc] = useState(null);
   const [failed, setFailed] = useState(false);
+  const [drawn, setDrawn] = useState(isPptx(item));
+  const fallBack = useCallback(() => setDrawn(false), []);
   useEffect(() => {
-    if (!blob) return undefined;
+    if (!blob || drawn) return undefined;
     let live = true;
     setDoc(null);
     setFailed(false);
@@ -136,8 +195,9 @@ function OfficeViewer({ item }) {
       if (result) setDoc(result); else setFailed(true);
     }, () => live && setFailed(true));
     return () => { live = false; };
-  }, [blob]);
+  }, [blob, drawn]);
   if (error) return <Unavailable item={item} message={error} />;
+  if (drawn) return blob ? <SlideDeck blob={blob} onFail={fallBack} /> : <Loading />;
   if (failed) return <Unavailable item={item} message="This document can’t be shown here. Download it to open it." />;
   if (!doc) return <Loading />;
   if (doc.kind === 'doc') {

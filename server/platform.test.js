@@ -830,8 +830,10 @@ test('document text is searchable with a snippet and only the uploader or an adm
   assert.equal((await user(`/api/content/${id}/text`, { method: 'PUT', body: { text: long } })).status, 200, 'large text bodies are accepted');
   await admin(`/api/content/${id}/review`, { method: 'POST', body: { decision: 'approved' } });
   assert.equal((await viewer(`/api/content/${id}/text`, { method: 'PUT', body: { text: 'spam' } })).status, 403);
-  const found = (await viewer('/api/content?scope=library&q=never%20dies&limit=10')).json.items.find(item => item.id === id);
-  assert.ok(found, 'text inside documents is searched');
+  assert.ok(!(await viewer('/api/content?scope=library&q=never%20dies&limit=10')).json.items.some(item => item.id === id),
+    'the default search only looks at titles and descriptions');
+  const found = (await viewer('/api/content?scope=library&q=never%20dies&in=all&limit=10')).json.items.find(item => item.id === id);
+  assert.ok(found, 'text inside documents is searched when asked');
   assert.match(found.snippet, /never born/);
   assert.equal(found.has_text, 1);
   const link = (await admin('/api/content', { method: 'POST', body: { title: 'Not a doc', url: 'https://example.org/text-link' } })).json;
@@ -964,6 +966,84 @@ test('admins can merge separate uploads into one card, moving their parts and bo
   assert.ok((await user('/api/notifications')).json.items.some(item => item.kind === 'merged' && item.content_id === main.id));
   assert.equal((await admin(`/api/content/${main.id}`, { method: 'DELETE', body: REASON })).status, 200);
   assert.equal((await admin(`/api/content/${mine.id}`)).status, 404, 'removing the card removes merged parts');
+});
+
+test('site admins can remove several duplicates at once with one reason', async () => {
+  const user = await signIn('user');
+  const org = await signIn('org_admin');
+  const admin = await signIn('site_admin');
+  const make = async (who, title) => (await who('/api/content', { method: 'POST', body: { title, url: 'https://example.org/bulk-dup' } })).json;
+  const first = await make(admin, 'Bulk dup first');
+  const second = await make(user, 'Bulk dup second');
+  const third = await make(admin, 'Bulk dup third');
+  const ids = [second.id, third.id];
+  assert.equal((await org('/api/content/bulk-remove', { method: 'POST', body: { ids, ...REASON } })).status, 403);
+  assert.equal((await admin('/api/content/bulk-remove', { method: 'POST', body: { ids } })).status, 400, 'a reason is required');
+  assert.equal((await admin('/api/content/bulk-remove', { method: 'POST', body: { ids: [], ...REASON } })).status, 400);
+  const done = await admin('/api/content/bulk-remove', { method: 'POST', body: { ids: [...ids, 'missing-id'], ...REASON } });
+  assert.equal(done.status, 200);
+  assert.deepEqual(done.json, { removed: 2, failed: [] });
+  assert.equal((await admin(`/api/content/${second.id}`)).status, 404);
+  assert.equal((await admin(`/api/content/${first.id}`)).status, 200, 'unselected copies stay');
+  assert.ok((await user('/api/notifications')).json.items.some(item => item.kind === 'removed' && item.title.includes('Bulk dup second')));
+  await admin(`/api/content/${first.id}`, { method: 'DELETE', body: REASON });
+});
+
+test('members can change their display name, which updates their cards', async () => {
+  const viewer = await signIn('viewer@example.test');
+  const item = (await viewer('/api/content', { method: 'POST', body: { title: 'Rename check', url: 'https://example.org/rename' } })).json;
+  assert.equal((await viewer('/api/auth/me', { method: 'PATCH', body: { name: 'x' } })).status, 400);
+  const changed = await viewer('/api/auth/me', { method: 'PATCH', body: { name: '  Bhakta   Viewer ' } });
+  assert.equal(changed.status, 200);
+  assert.equal(changed.json.user.name, 'Bhakta Viewer');
+  assert.equal((await viewer(`/api/content/${item.id}`)).json.item.uploader, 'Bhakta Viewer');
+  assert.equal((await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: '{"name":"Anon"}' })).status, 401);
+  await viewer('/api/auth/me', { method: 'PATCH', body: { name: 'Test Viewer' } });
+});
+
+test('guests can view and download shared public uploads and their files, but nothing else', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const upload = async (who, title, parentId) => {
+    const started = await who('/api/uploads', { method: 'POST', body: { title, name: 'guest.png', mime: 'image/png', size: png.length, parentId } });
+    return (await who(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: png })).json.id;
+  };
+  const main = await upload(admin, 'Guest main');
+  const part = await upload(admin, 'Guest part', main);
+  const pendingPart = await upload(user, 'Guest pending part', main);
+  const pending = await upload(user, 'Guest pending');
+
+  const view = await fetch(`${base}/api/public/content/${main}`);
+  assert.equal(view.status, 200);
+  const data = await view.json();
+  assert.equal(data.item.title, 'Guest main');
+  assert.equal(data.item.uploader, 'Test Admin');
+  assert.equal(data.item.uploader_id, undefined, 'guests see no account details');
+  assert.equal(data.item.storage_key, undefined);
+  assert.deepEqual(data.parts.map(row => row.id), [part], 'only approved parts are listed');
+
+  const inline = await fetch(`${base}/api/content/${main}/file?inline=1`);
+  assert.equal(inline.status, 200);
+  assert.match(inline.headers.get('content-disposition'), /^inline/);
+  assert.deepEqual(Buffer.from(await inline.arrayBuffer()), png);
+  assert.equal((await fetch(`${base}/api/content/${part}/file?inline=1`)).status, 200);
+  const download = await fetch(`${base}/api/content/${main}/file`);
+  assert.equal(download.status, 200, 'guests can download shared files');
+  assert.match(download.headers.get('content-disposition'), /^attachment/);
+  for (const id of [pending, pendingPart]) assert.equal((await fetch(`${base}/api/content/${id}/file`)).status, 404, 'unshared files cannot be downloaded');
+  for (const id of [pending, pendingPart]) {
+    assert.equal((await fetch(`${base}/api/public/content/${id}`)).status, 404);
+    assert.equal((await fetch(`${base}/api/content/${id}/file?inline=1`)).status, 404);
+  }
+  assert.equal((await fetch(`${base}/api/public/content/${part}`)).status, 404, 'parts are viewed through their card');
+  assert.equal((await fetch(`${base}/api/content/${main}`)).status, 401, 'other routes still need sign-in');
+  await admin(`/api/content/${main}/visibility`, { method: 'PATCH', body: { visibility: 'private' } });
+  assert.equal((await fetch(`${base}/api/public/content/${main}`)).status, 404, 'private uploads are hidden');
+  assert.equal((await fetch(`${base}/api/content/${part}/file?inline=1`)).status, 404, 'parts of private uploads are hidden');
+  const signedIn = await admin(`/api/content/${main}/thumbnail`);
+  assert.equal(signedIn.status, 404, 'signed-in requests use the normal routes');
+  for (const id of [main, pending]) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
 });
 
 test('admins get analytics in the overview; members do not', async () => {

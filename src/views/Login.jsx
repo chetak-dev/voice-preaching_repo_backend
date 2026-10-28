@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Eye, EyeOff, Lock, Mail, ShieldCheck, User, Users } from 'lucide-react';
 import { api } from '../api.js';
 import { Button, Logo, MadeWithLove, cx } from '../components/ui.jsx';
 
@@ -34,7 +34,7 @@ function Field({ id, label, icon: Icon, error, children }) {
   );
 }
 
-export default function Login({ config, onSignedIn }) {
+export default function Login({ config, onSignedIn, onBack }) {
   const [mode, setMode] = useState(modeFromHash);
   const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' });
   const [showPassword, setShowPassword] = useState(false);
@@ -111,6 +111,12 @@ export default function Login({ config, onSignedIn }) {
       {/* Form: rounded sheet on mobile, centered column on desktop */}
       <div className="relative -mt-8 flex flex-1 justify-center rounded-t-[2rem] bg-slate-50 px-6 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-8 shadow-nav lg:mt-0 lg:items-center lg:rounded-none lg:bg-white lg:py-12 lg:shadow-none">
         <div className="w-full max-w-sm">
+          {onBack && (
+            <button type="button" onClick={onBack}
+              className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 transition hover:text-brand-700">
+              <ArrowLeft className="h-4 w-4" />Back to the shared content
+            </button>
+          )}
           <div className="mb-6 grid grid-cols-2 rounded-2xl bg-slate-200/60 p-1 lg:bg-slate-100" role="tablist">
             {[['signin', 'Sign in'], ['signup', 'Sign up']].map(([id, label]) => (
               <a key={id} href={`#/${id}`} role="tab" aria-selected={mode === id}

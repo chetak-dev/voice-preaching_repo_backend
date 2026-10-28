@@ -19,10 +19,26 @@ function word(xml) {
   });
 }
 
+// Slides are shown in the order the presentation lists them, which is not always the order of the file names.
+function slideOrder(files, decode) {
+  const fallback = numbered(files, /^ppt\/slides\/slide(\d+)\.xml$/);
+  if (!files['ppt/presentation.xml'] || !files['ppt/_rels/presentation.xml.rels']) return fallback;
+  const targets = new Map(byTag(parse(decode('ppt/_rels/presentation.xml.rels')), 'Relationship')
+    .map(rel => [rel.getAttribute('Id'), `ppt/${(rel.getAttribute('Target') || '').replace(/^\/?ppt\//, '').replace(/^\.\//, '')}`]));
+  const ordered = byTag(parse(decode('ppt/presentation.xml')), 'sldId')
+    .map(slide => targets.get(slide.getAttribute('r:id')))
+    .filter(name => name && files[name]);
+  return ordered.length ? ordered : fallback;
+}
+
+const isHidden = (files, decode, name) => /<p:sld\b[^>]*\bshow="0"/.test(decode(name).slice(0, 2000));
+
 function slides(files, decode) {
-  return numbered(files, /^ppt\/slides\/slide(\d+)\.xml$/).map(name => {
-    const lines = byTag(parse(decode(name)), 'p').map(textOf).filter(line => line.trim());
-    return { title: lines[0] || '', lines: lines.slice(1) };
+  return slideOrder(files, decode).flatMap(name => {
+    if (isHidden(files, decode, name)) return [];
+    const xml = parse(decode(name));
+    const lines = byTag(xml, 'p').map(textOf).filter(line => line.trim());
+    return [{ title: lines[0] || '', lines: lines.slice(1) }];
   });
 }
 
@@ -50,14 +66,32 @@ function sheets(files, decode) {
   });
 }
 
-/** Returns { kind: 'doc' | 'slides' | 'sheets', ... } or null when the file is not a readable Office document. */
-export async function readOffice(blob) {
+async function unzip(blob, wanted) {
   const { unzipSync } = await import('fflate');
-  const wanted = name => name === 'word/document.xml' || name === 'xl/sharedStrings.xml' || name === 'xl/workbook.xml'
-    || /^ppt\/slides\/slide\d+\.xml$/.test(name) || /^xl\/worksheets\/sheet\d+\.xml$/.test(name);
   const files = unzipSync(new Uint8Array(await blob.arrayBuffer()), { filter: file => wanted(file.name) });
   const decoder = new TextDecoder();
-  const decode = name => decoder.decode(files[name]);
+  return { files, decode: name => decoder.decode(files[name]) };
+}
+
+/**
+ * For drawn slide decks: `files` is the order slides are drawn in (by file name) and `show` is the order the
+ * presentation actually uses, without hidden slides.
+ */
+export async function deckLayout(blob) {
+  const { files, decode } = await unzip(blob, name => name === 'ppt/presentation.xml' || name === 'ppt/_rels/presentation.xml.rels'
+    || /^ppt\/slides\/slide\d+\.xml$/.test(name));
+  return {
+    files: numbered(files, /^ppt\/slides\/slide(\d+)\.xml$/),
+    show: slideOrder(files, decode).filter(name => !isHidden(files, decode, name)),
+  };
+}
+
+/** Returns { kind: 'doc' | 'slides' | 'sheets', ... } or null when the file is not a readable Office document. */
+export async function readOffice(blob) {
+  const wanted = name => name === 'word/document.xml' || name === 'xl/sharedStrings.xml' || name === 'xl/workbook.xml'
+    || name === 'ppt/presentation.xml' || name === 'ppt/_rels/presentation.xml.rels'
+    || /^ppt\/slides\/slide\d+\.xml$/.test(name) || /^xl\/worksheets\/sheet\d+\.xml$/.test(name);
+  const { files, decode } = await unzip(blob, wanted);
   if (files['word/document.xml']) return { kind: 'doc', paragraphs: word(decode('word/document.xml')) };
   const deck = slides(files, decode);
   if (deck.length) return { kind: 'slides', slides: deck };
