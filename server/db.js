@@ -62,6 +62,10 @@ const SCHEMA = `
     content_id TEXT NOT NULL REFERENCES content(id), user_id TEXT NOT NULL REFERENCES users(id),
     viewed_at TEXT NOT NULL, PRIMARY KEY(content_id, user_id)
   );
+  -- One row per time a member opens an item; content_views (one row per member) is kept for older data.
+  CREATE TABLE IF NOT EXISTS view_events (
+    content_id TEXT NOT NULL REFERENCES content(id), user_id TEXT NOT NULL REFERENCES users(id), viewed_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS audit (
     id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id),
     action TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL
@@ -166,6 +170,11 @@ export function openDatabase({ url, authToken, directory }) {
     await client.execute('CREATE INDEX IF NOT EXISTS content_parent ON content(parent_id, created_at)');
     await client.execute('CREATE INDEX IF NOT EXISTS content_fingerprint ON content(fingerprint)');
     await client.execute('CREATE INDEX IF NOT EXISTS content_uploader ON content(uploader_id, created_at)');
+    await client.execute('CREATE INDEX IF NOT EXISTS view_events_content ON view_events(content_id)');
+    await client.execute('CREATE INDEX IF NOT EXISTS view_events_time ON view_events(viewed_at)');
+    // Views recorded before every open was counted become one open each.
+    await client.execute(`INSERT INTO view_events (content_id, user_id, viewed_at)
+      SELECT content_id, user_id, viewed_at FROM content_views WHERE NOT EXISTS (SELECT 1 FROM view_events)`);
     await addColumns('uploads', [
       ['chunk_lock', 'TEXT'],
       ['chunk_lock_expires', 'INTEGER'],

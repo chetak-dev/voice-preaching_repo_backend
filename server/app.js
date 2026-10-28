@@ -482,7 +482,7 @@ export function createApp(overrides = {}) {
     EXISTS(SELECT 1 FROM bookmarks b WHERE b.content_id = c.id AND b.user_id = ?) AS bookmarked,
     EXISTS(SELECT 1 FROM thumbnails t WHERE t.content_id = c.id) AS has_thumb,
     EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id) AS has_text,
-    (SELECT count(*) FROM content_views v WHERE v.content_id = c.id) AS views,
+    (SELECT count(*) FROM view_events v WHERE v.content_id = c.id) AS views,
     (SELECT count(*) FROM content a WHERE a.parent_id = c.id AND a.status = 'approved') AS parts
     FROM content c JOIN users u ON u.id = c.uploader_id
     LEFT JOIN users r ON r.id = c.reviewed_by
@@ -714,13 +714,13 @@ export function createApp(overrides = {}) {
     const tally = values => [...values.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map())]
       .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, n]) => ({ name, count: n }));
     const analytics = {
-      topViewed: (await db.all(`SELECT c.id, c.title, c.type, count(v.user_id) AS views FROM content c JOIN content_views v ON v.content_id = c.id
+      topViewed: (await db.all(`SELECT c.id, c.title, c.type, count(*) AS views FROM content c JOIN view_events v ON v.content_id = c.id
         WHERE c.status = 'approved' AND c.visibility = 'public' GROUP BY c.id, c.title, c.type ORDER BY views DESC LIMIT 10`))
         .map(row => ({ ...row, views: Number(row.views) })),
       topContributors: (await db.all(`SELECT u.id, u.name, count(c.id) AS approved FROM users u JOIN content c ON c.uploader_id = u.id
         WHERE c.status = 'approved' GROUP BY u.id, u.name ORDER BY approved DESC LIMIT 10`)).map(row => ({ ...row, approved: Number(row.approved) })),
       weekly,
-      viewsLast30: Number(await count('SELECT count(*) AS n FROM content_views WHERE viewed_at >= ?', new Date(Date.now() - 30 * 86400_000).toISOString())),
+      viewsLast30: Number(await count('SELECT count(*) AS n FROM view_events WHERE viewed_at >= ?', new Date(Date.now() - 30 * 86400_000).toISOString())),
       languages: tally(tagged.map(row => row.language || 'Not set')),
       topics: tally(tagged.flatMap(row => (row.topics ? row.topics.split(',') : []))),
       openRequests: Number(await count("SELECT count(*) AS n FROM content_requests WHERE status = 'open'")),
@@ -1165,9 +1165,10 @@ export function createApp(overrides = {}) {
   app.post('/api/content/:id/view', h(async (req, res) => {
     const { item } = await getContent(req);
     if (item.status === 'approved') {
-      await db.run('INSERT OR IGNORE INTO content_views (content_id, user_id, viewed_at) VALUES (?, ?, ?)', item.id, req.user.id, new Date().toISOString());
+      // Every open counts, not just the first one per member.
+      await db.run('INSERT INTO view_events (content_id, user_id, viewed_at) VALUES (?, ?, ?)', item.id, req.user.id, new Date().toISOString());
     }
-    res.json({ views: await count('SELECT count(*) AS n FROM content_views WHERE content_id = ?', item.id) });
+    res.json({ views: await count('SELECT count(*) AS n FROM view_events WHERE content_id = ?', item.id) });
   }));
   app.delete('/api/content/:id', h(async (req, res) => {
     if (req.user.role !== 'site_admin') throw fail(403, 'Only site admins can remove content.');
@@ -1243,6 +1244,7 @@ export function createApp(overrides = {}) {
       await removeStored(part, release);
       await db.run('DELETE FROM bookmarks WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content_views WHERE content_id = ?', part.id);
+      await db.run('DELETE FROM view_events WHERE content_id = ?', part.id);
       await db.run('DELETE FROM thumbnails WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content_text WHERE content_id = ?', part.id);
       await db.run('DELETE FROM content WHERE id = ?', part.id);
@@ -1250,6 +1252,7 @@ export function createApp(overrides = {}) {
     await removeStored(item, release);
     await db.run('DELETE FROM bookmarks WHERE content_id = ?', item.id);
     await db.run('DELETE FROM content_views WHERE content_id = ?', item.id);
+    await db.run('DELETE FROM view_events WHERE content_id = ?', item.id);
     await db.run('DELETE FROM thumbnails WHERE content_id = ?', item.id);
     await db.run('DELETE FROM content_text WHERE content_id = ?', item.id);
     const deleted = await db.run('DELETE FROM content WHERE id = ? AND deletion_token = ?', item.id, token);

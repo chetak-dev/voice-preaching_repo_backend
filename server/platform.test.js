@@ -506,7 +506,7 @@ test('overview shows type counts to everyone and storage figures only to admins'
   assert.equal(after.storage.total, null);
 });
 
-test('views count each member once and only for approved content', async () => {
+test('views count every open, only for approved content', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');
   const viewer = await signIn('viewer@example.test');
@@ -514,10 +514,10 @@ test('views count each member once and only for approved content', async () => {
   assert.equal((await user(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 0, 'pending content is not counted');
   await admin(`/api/content/${link.json.id}/review`, { method: 'POST', body: { decision: 'approved' } });
   assert.equal((await viewer(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 1);
-  assert.equal((await viewer(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 1);
-  assert.equal((await admin(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 2);
+  assert.equal((await viewer(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 2, 'opening again counts again');
+  assert.equal((await admin(`/api/content/${link.json.id}/view`, { method: 'POST' })).json.views, 3);
   const listed = (await user('/api/content?scope=library')).json.items.find(item => item.id === link.json.id);
-  assert.equal(listed.views, 2);
+  assert.equal(listed.views, 3);
   assert.equal((await admin(`/api/content/${link.json.id}`, { method: 'DELETE', body: REASON })).status, 200);
 });
 
