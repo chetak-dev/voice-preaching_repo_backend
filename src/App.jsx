@@ -29,6 +29,7 @@ import Overview from './views/Overview.jsx';
 import Review from './views/Review.jsx';
 import Storage from './views/Storage.jsx';
 import Upload from './views/Upload.jsx';
+import { takeSharedItems } from './shareTarget.js';
 
 const ITEMS = {
   library: { label: 'Library', icon: FolderOpen, tone: 'bg-violet-500/15 text-violet-300', soft: 'bg-violet-50 text-violet-600' },
@@ -306,6 +307,15 @@ function Shell({ user, config, onSignOut, onUserChanged }) {
   const [requestTarget, setRequestTarget] = useState(null);
   useEffect(() => { if (active !== 'upload') setRequestTarget(null); }, [active]);
   const uploadFor = useCallback(request => { setAddTarget(null); setRequestTarget(request); navigate('upload'); }, [navigate]);
+  // Something shared from another app (Android share sheet) opens straight on the upload page.
+  const [incoming, setIncoming] = useState(null);
+  useEffect(() => {
+    takeSharedItems().then(shared => {
+      if (!shared || (!shared.files.length && !shared.urls.length)) return;
+      setAddTarget(null); setRequestTarget(null); setIncoming(shared); navigate('upload');
+    });
+  }, [navigate]);
+  const clearIncoming = useCallback(() => setIncoming(null), []);
   const [focusId, setFocusId] = useState(sharedContentId);
   const openContent = useCallback(id => { setFocusId(id); navigate('library'); }, [navigate]);
   const clearFocus = useCallback(() => setFocusId(null), []);
@@ -317,7 +327,7 @@ function Shell({ user, config, onSignOut, onUserChanged }) {
     leaderboard: <Leaderboard {...props} />,
     mine: <Library key="mine" scope="mine" {...props} />,
     upload: <Upload key={addTarget?.id || 'new'} parent={addTarget} onClearParent={() => setAddTarget(null)}
-      request={requestTarget} onClearRequest={() => setRequestTarget(null)} {...props} />,
+      request={requestTarget} onClearRequest={() => setRequestTarget(null)} incoming={incoming} onIncomingUsed={clearIncoming} {...props} />,
     requests: <Requests {...props} onUploadFor={uploadFor} onOpenContent={openContent} />,
     notifications: <Notifications {...props} notifications={notifications} onOpenContent={openContent} />,
     downloads: <Downloads {...props} />,

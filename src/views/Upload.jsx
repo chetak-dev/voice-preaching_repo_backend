@@ -131,7 +131,7 @@ function QueueItem({ item, index, locked, compact, cover, canCopy, onChange, onR
   );
 }
 
-export default function Upload({ user, navigate, onChanged, parent, onClearParent, request, onClearRequest }) {
+export default function Upload({ user, navigate, onChanged, parent, onClearParent, request, onClearRequest, incoming, onIncomingUsed }) {
   const toast = useToast();
   const inputRef = useRef(null);
   const [mode, setMode] = useState('file');
@@ -212,9 +212,9 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     } catch { /* the check is only a hint */ }
   }
 
-  function addLinks() {
+  function addLinks(source = links, title = '') {
     const withScheme = value => (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`);
-    const urls = [...new Set(links.split(/\s+/).filter(Boolean).map(withScheme))];
+    const urls = [...new Set(source.split(/\s+/).filter(Boolean).map(withScheme))];
     const invalid = urls.find(url => {
       try { const parsed = new URL(url); return !['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password; } catch { return true; }
     });
@@ -223,13 +223,28 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     setError('');
     const added = urls.map(url => {
       const yt = youtubeId(url);
-      return { key: ++nextKey, kind: 'link', url, type: 'link', title: parent?.title || '', description: '', status: 'ready', progress: 0,
+      return { key: ++nextKey, kind: 'link', url, type: 'link', title: parent?.title || (urls.length === 1 ? title : ''), description: '', status: 'ready', progress: 0,
         thumbUrl: yt ? `https://img.youtube.com/vi/${encodeURIComponent(yt)}/hqdefault.jpg` : undefined };
     });
     setItems(list => [...list, ...added]);
-    setLinks('');
+    if (source === links) setLinks('');
     track(checkDuplicates({ urls }, added.map(item => ({ key: item.key, url: item.url }))));
   }
+
+  // Files and links shared from another app are added as soon as the page opens.
+  const usedIncoming = useRef(null);
+  useEffect(() => {
+    if (!incoming || usedIncoming.current === incoming) return;
+    usedIncoming.current = incoming;
+    if (incoming.files.length) addFiles(incoming.files);
+    if (incoming.urls.length) {
+      if (!incoming.files.length) setMode('link');
+      addLinks(incoming.urls.join(' '), incoming.title);
+    }
+    toast(`${plural(incoming.files.length + incoming.urls.length, 'item')} ready to upload. Add a title and description.`);
+    onIncomingUsed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming]);
 
   async function submit(event) {
     event.preventDefault();
@@ -415,7 +430,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
                 placeholder={'https://youtube.com/watch?v=…\nhttps://…\nOne link per line'}
                 value={links} onChange={e => setLinks(e.target.value)} />
               <div className="mt-2 flex justify-end">
-                <Button variant="secondary" size="sm" icon={Plus} onClick={addLinks} disabled={busy || !links.trim()}>Add links</Button>
+                <Button variant="secondary" size="sm" icon={Plus} onClick={() => addLinks()} disabled={busy || !links.trim()}>Add links</Button>
               </div>
             </div>
           )}

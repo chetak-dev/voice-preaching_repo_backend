@@ -3,7 +3,9 @@
 // except media the user explicitly downloaded for offline listening (stored by src/offline.js).
 const CACHE = 'kalpa-taru-v1';
 const OFFLINE_CACHE = 'kt-offline-media';
-const KEEP = [CACHE, OFFLINE_CACHE];
+// Files shared to the app from another app (see share_target in the manifest) wait here until the app picks them up.
+const SHARE_CACHE = 'kt-share-target';
+const KEEP = [CACHE, OFFLINE_CACHE, SHARE_CACHE];
 const SHELL = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 const OFFLINE_ROUTE = /^\/api\/content\/([^/]+)\/(file|thumbnail)$/;
 
@@ -67,9 +69,31 @@ self.addEventListener('activate', event => {
     .then(() => self.clients.claim()));
 });
 
+async function receiveShare(request) {
+  try {
+    const form = await request.formData();
+    const files = form.getAll('files').filter(file => file && typeof file !== 'string' && file.size);
+    const text = key => String(form.get(key) || '').slice(0, 4000);
+    const meta = { title: text('title'), text: text('text'), url: text('url'), at: Date.now(), files: [] };
+    await caches.delete(SHARE_CACHE);
+    const cache = await caches.open(SHARE_CACHE);
+    for (const [index, file] of files.entries()) {
+      const key = `/__share/file/${index}`;
+      await cache.put(key, new Response(file, { headers: { 'Content-Type': file.type || 'application/octet-stream' } }));
+      meta.files.push({ key, name: file.name || `Shared file ${index + 1}`, type: file.type || '' });
+    }
+    await cache.put('/__share/meta', new Response(JSON.stringify(meta), { headers: { 'Content-Type': 'application/json' } }));
+  } catch { /* Open the upload page anyway; the user can pick the files there. */ }
+  return Response.redirect('/?shared=1#/upload', 303);
+}
+
 self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
+  if (request.method === 'POST' && url.origin === self.location.origin && url.pathname === '/share-target') {
+    event.respondWith(receiveShare(request));
+    return;
+  }
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   // Navigations (e.g. "Download" links that save an attachment) always go straight to the network.
   if (OFFLINE_ROUTE.test(url.pathname) && request.mode !== 'navigate') { serveOffline(event, url); return; }

@@ -384,6 +384,9 @@ export function createApp(overrides = {}) {
       FROM content c WHERE c.id = ? AND c.status = 'approved' AND c.visibility = 'public' AND c.parent_id IS NULL`, id);
   };
   const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+  // Android share sheet: the service worker normally handles this; without it, just open the upload page.
+  app.post('/share-target', (req, res) => res.redirect(303, '/#/upload'));
+
   app.get(['/s/:id', '/api/share/:id'], shareLimiter, h(async (req, res) => {
     const item = await sharedItem(req.params.id);
     const target = item ? `/?content=${encodeURIComponent(item.id)}#/library` : '/';

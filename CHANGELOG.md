@@ -1,10 +1,14 @@
-﻿# Changelog
+# Changelog
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.12
+
+- Share to Kalpa Taru from other apps on Android: once the app is installed, pick Kalpa Taru in any app's share menu and the shared files or links open on the Contribute page, ready for a title and description.
+
 ## 1.7.11
 
-- Uploads can be cancelled after they start: **Cancel** on the Contribute page, an ✕ on each item, and **Cancel** / ✕ in the upload tray. Anything already sent is discarded and nothing appears in the library.
+- Uploads can be cancelled after they start: **Cancel** on the Contribute page, an ? on each item, and **Cancel** / ? in the upload tray. Anything already sent is discarded and nothing appears in the library.
 
 ## 1.7.10
 
@@ -76,12 +80,12 @@ The version shown in the app (sidebar on desktop, **More** menu on phones) comes
 
 ## 1.6.0
 
-- Library sorting (Newest, Most viewed, Aâ€“Z, Oldest), remembered per device.
+- Library sorting (Newest, Most viewed, A–Z, Oldest), remembered per device.
 - "Recently added" and "Most viewed" rows on the library home once there are 8+ items.
 - Bulk reject in the review queue (one shared note for all selected items).
 - Admins can edit an item's title and description from its preview.
 - Contributors can withdraw their own pending submissions.
-- New media player: play button on audio/video cards, custom seek bar, Â±15s skip, speed, minimise, and lock-screen / headphone controls.
+- New media player: play button on audio/video cards, custom seek bar, ±15s skip, speed, minimise, and lock-screen / headphone controls.
 - Cleaner automatic titles from file names (dates, IDs, IMG/VID/WA prefixes and "(1)" are removed; verse references are kept).
 - Installable app (PWA) with an **Install app** button and iPhone instructions.
 - Share links (`/s/<id>`) show a rich preview (title, description, thumbnail) in WhatsApp and other apps. Only approved public items are revealed.
@@ -114,37 +118,37 @@ The version shown in the app (sidebar on desktop, **More** menu on phones) comes
 - The loading screen shows only the Kalpa Taru name.
 - "ISKCON Brahmapur" sits under the name as a small, spaced capital line that is exactly as wide as the name, so it lines up with the logo.
 
-## 1.5.0 â€” 2026-10-27
+## 1.5.0 — 2026-10-27
 
 - Google Drive uploads are now sorted into **Images**, **Videos**, **Audios** and **Documents** subfolders inside the app's Drive folder (**VOICE Media** or **Kalpa Taru Media**). Each subfolder is created automatically the first time that type is uploaded. Files uploaded earlier stay where they are and keep working. If a subfolder can't be prepared, the upload goes into the main folder instead of failing.
 
-## 1.4.0 â€” 2026-10-27
+## 1.4.0 — 2026-10-27
 
 - **Removing content is now site-admin only and deliberate.** Members and org admins can no longer delete anything, including their own pending submissions. A site admin must write a reason (at least 5 characters) and type REMOVE to confirm. The reason is saved in the activity log.
 - **Storage info is for admins only.** The Overview page (storage use and sizes by type) is hidden from members, and the server no longer sends storage figures or sizes to them.
 - **Sign out is a proper button** in the desktop sidebar and the phone menu.
-- "ISKCON Brahmapur" appears under the Kalpa Taru name (sidebar, phone header, sign-in page, loading screen), and "Made with â¤ by ISKCON Brahmapur" sits above the Privacy and Terms links.
+- "ISKCON Brahmapur" appears under the Kalpa Taru name (sidebar, phone header, sign-in page, loading screen), and "Made with ❤ by ISKCON Brahmapur" sits above the Privacy and Terms links.
 - Content cards show the upload time only on wide screens, so the uploader name has room.
 
-## 1.3.1 â€” 2026-10-27
+## 1.3.1 — 2026-10-27
 
 - Content cards: the view count, share and save buttons now sit together, smaller, on the bottom line, so the title gets the full card width.
 
-## 1.3.0 â€” 2026-10-27
+## 1.3.0 — 2026-10-27
 
 - Renamed the app to **Kalpa Taru**, with a new wish-fulfilling tree logo (app icon, favicon, sign-in page, sidebar, loading screen). The "Content Hub" tagline is removed; the app is simply Kalpa Taru.
 - Newly connected Google Drives get a **Kalpa Taru Media** folder. Drives connected earlier keep using their **VOICE Media** folder, including after a reconnect.
 
-## 1.2.2 â€” 2026-10-26
+## 1.2.2 — 2026-10-26
 
 - Phones show 2 cards per row, with the type label, share button and view count visible again.
 
-## 1.2.1 â€” 2026-10-26
+## 1.2.1 — 2026-10-26
 
 - Full preview before download: PDFs show every page (also on phones), Word documents show their text, PowerPoint shows each slide, Excel shows each sheet as a table, text files show their content, and videos, audio and YouTube links play inside the preview.
 - Removed the preview from the upload screen; files waiting to upload still show a small thumbnail.
 
-## 1.2.0 â€” 2026-10-26
+## 1.2.0 — 2026-10-26
 
 - Uploads by site admins and org admins are published right away; only member uploads go to the review queue.
 - Thumbnails for every file type: image, video frame, PDF first page, audio cover art, Office documents and text. Existing items get thumbnails when an admin or the uploader opens the library.
@@ -154,7 +158,7 @@ The version shown in the app (sidebar on desktop, **More** menu on phones) comes
 - The desktop sidebar expands on hover and collapses when the pointer leaves.
 - Fixed: on phones, the bottom navigation bar disappeared in list view.
 
-## 1.1.0 â€” 2026-10-21
+## 1.1.0 — 2026-10-21
 
 - Add files and links to an existing upload: contributors can add to their own upload while it is pending or approved, and anyone can add to an approved upload. Each addition is reviewed separately and earns its contributor points.
 - Upload many files or links at once, with an optional shared title and description.
