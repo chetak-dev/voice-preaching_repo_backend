@@ -418,6 +418,18 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
       </div>
 
       <div className="mb-5 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <span>Search in</span>
+          <div className="flex rounded-full bg-white p-0.5 ring-1 ring-inset ring-slate-200" role="radiogroup" aria-label="Search in">
+            {[[false, 'Title & description'], [true, 'Inside files too']].map(([value, label]) => (
+              <button key={label} type="button" role="radio" aria-checked={deep === value} onClick={() => changeDeep(value)}
+                className={cx('rounded-full px-3 py-1 font-medium transition', deep === value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900')}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {deep && <span className="text-slate-400">Slower: also reads the text inside documents.</span>}
+        </div>
         <div className="flex items-center gap-2">
           <SearchBox query={query} onQuery={setQuery} pool={filtered} onPick={openItem} busy={loading && Boolean(q)}
             placeholder={deep ? 'Search everything, even inside files' : 'Search titles & descriptions'} />
@@ -452,20 +464,6 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
             <option value="all">All statuses</option>
             {Object.entries(STATUS_META).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
           </select>
-        )}
-        {query.trim() && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span>Search in</span>
-            <div className="flex rounded-full bg-white p-0.5 ring-1 ring-inset ring-slate-200" role="radiogroup" aria-label="Search in">
-              {[[false, 'Title & description'], [true, 'Inside files too']].map(([value, label]) => (
-                <button key={label} type="button" role="radio" aria-checked={deep === value} onClick={() => changeDeep(value)}
-                  className={cx('rounded-full px-3 py-1 font-medium transition', deep === value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900')}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {deep && <span className="text-slate-400">Slower: also reads the text inside documents.</span>}
-          </div>
         )}
         {activeFilters > 0 && (
           <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-200 sm:grid-cols-[repeat(4,minmax(0,1fr))_auto]">

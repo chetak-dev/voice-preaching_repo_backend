@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.19
+
+- The "Search in: Title & description / Inside files too" choice now sits above the search bar and is always visible, so it can be set before typing and the search bar no longer moves while you type.
+
 ## 1.7.18
 
 - Search now also finds cards by the titles and file names of the files inside them. The matching file is listed on the card (grid and list view) and in the suggestions, with the searched words highlighted. Accents are ignored as before.
