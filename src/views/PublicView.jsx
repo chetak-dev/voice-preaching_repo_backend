@@ -3,7 +3,7 @@ import { Download, ExternalLink, Eye, Layers, LogIn, SearchX, UserPlus } from 'l
 import { api, fileUrl } from '../api.js';
 import { ContentThumb } from '../components/Content.jsx';
 import FullPreview from '../components/FullPreview.jsx';
-import { APP_ORG, Badge, Button, Logo, MadeWithLove, Modal, Spinner, TYPE_META, cx, formatBytes } from '../components/ui.jsx';
+import { APP_NAME, Badge, Button, Logo, MadeWithLove, Modal, Spinner, TYPE_META, cx, formatBytes } from '../components/ui.jsx';
 
 // Remembers which shared item to open once the visitor has signed in (the Google sign-in redirect drops the link).
 export const PENDING_CONTENT_KEY = 'voice.pendingContent';
@@ -123,7 +123,7 @@ export default function PublicView({ contentId, onSignIn }) {
               <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
                 <div className="min-w-0 flex-1">
                   <h2 className="text-lg font-bold">Discover more like this</h2>
-                  <p className="mt-1 text-sm text-white/80">Create a free account to explore the whole {APP_ORG} library, save favourites and share your own content.</p>
+                  <p className="mt-1 text-sm text-white/80">Create a free account to explore the whole {APP_NAME} library, save favourites and share your own content.</p>
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <button type="button" onClick={() => signIn('signin')}
