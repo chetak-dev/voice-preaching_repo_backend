@@ -351,6 +351,11 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
     setPreview(current => (current?.id === item.id ? { ...current, ...changes } : current));
     toast('Details updated.');
   }
+  function merged(item, count) {
+    toast(`Merged ${count} ${count === 1 ? 'card' : 'cards'} into “${item.title}”.`);
+    reload();
+    onChanged?.();
+  }
   const cardFooter = item => {
     if (scope !== 'mine') return null;
     if (canDelete(item)) return <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} className="text-rose-600 hover:bg-rose-50 hover:text-rose-700">Remove</Button>;
@@ -526,7 +531,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
       {list.hasMore && <div ref={sentinel} className="flex justify-center py-6">{loadingMore && <Loader2 className="h-5 w-5 animate-spin text-slate-400" aria-label="Loading more" />}</div>}
 
       <PreviewModal item={preview} onShare={share} onClose={() => setPreview(null)} user={user} onPickTag={pickTag}
-        onAddTo={target => { setPreview(null); onAddTo?.(target); }} onEdited={edited}
+        onAddTo={target => { setPreview(null); onAddTo?.(target); }} onEdited={edited} onMerged={merged}
         actions={preview && (canDelete() ? (
           <Button variant="secondary" icon={Trash2} onClick={() => remove(preview)} className="text-rose-600">Remove</Button>
         ) : canWithdraw(preview) && (
@@ -552,7 +557,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
 const CONFIRM_WORD = 'REMOVE';
 
-function RemoveContentModal({ item, onClose, onRemoved }) {
+export function RemoveContentModal({ item, onClose, onRemoved }) {
   const toast = useToast();
   const [reason, setReason] = useState('');
   const [typed, setTyped] = useState('');

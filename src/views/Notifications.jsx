@@ -1,11 +1,12 @@
 import React from 'react';
-import { Bell, CheckCheck, CheckCircle2, ChevronRight, ClipboardCheck, MessageSquarePlus, ShieldCheck, Trash2, XCircle } from 'lucide-react';
+import { Bell, CheckCheck, CheckCircle2, ChevronRight, ClipboardCheck, Layers, MessageSquarePlus, ShieldCheck, Trash2, XCircle } from 'lucide-react';
 import { Button, EmptyState, PageHeader, cx, timeAgo } from '../components/ui.jsx';
 
 const KINDS = {
   approved: { icon: CheckCircle2, tone: 'bg-emerald-50 text-emerald-600' },
   rejected: { icon: XCircle, tone: 'bg-rose-50 text-rose-600' },
   removed: { icon: Trash2, tone: 'bg-slate-100 text-slate-500' },
+  merged: { icon: Layers, tone: 'bg-brand-50 text-brand-600' },
   request: { icon: MessageSquarePlus, tone: 'bg-violet-50 text-violet-600' },
   role: { icon: ShieldCheck, tone: 'bg-amber-50 text-amber-600' },
 };

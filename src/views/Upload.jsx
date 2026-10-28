@@ -29,6 +29,10 @@ export function titleFromName(name) {
   return (cleaned || base.replace(/[_-]+/g, ' ').trim() || 'Untitled').slice(0, 160);
 }
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+const partName = item => {
+  if (item.kind === 'file') return titleFromName(item.file.name);
+  try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch { return 'Link'; }
+};
 let nextKey = 0;
 
 // Thumbnails are made one file at a time so a large batch of videos doesn't overwhelm the device.
@@ -53,7 +57,22 @@ function QueueThumb({ item, compact }) {
   );
 }
 
-function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, onCopyDescription }) {
+function Toggle({ label, hint, checked, disabled, onChange }) {
+  return (
+    <label className={cx('flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-200', disabled ? 'opacity-60' : 'cursor-pointer')}>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-slate-800">{label}</span>
+        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+      </span>
+      <input type="checkbox" role="switch" className="sr-only" checked={checked} disabled={disabled} onChange={e => onChange(e.target.checked)} />
+      <span aria-hidden="true" className={cx('relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors', checked ? 'bg-voice' : 'bg-slate-300')}>
+        <span className={cx('h-5 w-5 rounded-full bg-white shadow transition-transform', checked && 'translate-x-5')} />
+      </span>
+    </label>
+  );
+}
+
+function QueueItem({ item, index, locked, compact, cover, canCopy, onChange, onRemove, onCopyDescription }) {
   const done = item.status === 'done';
   return (
     <li className={cx('rounded-xl border', compact ? 'p-2.5' : 'p-3 sm:p-4', done ? 'border-emerald-200 bg-emerald-50/50' : item.status === 'error' ? 'border-rose-200' : 'border-slate-200')}>
@@ -61,7 +80,8 @@ function QueueItem({ item, index, locked, compact, canCopy, onChange, onRemove, 
         <QueueThumb item={item} compact={compact} />
         <div className="min-w-0 flex-1 space-y-2">
           <p className={cx('flex items-center gap-2', compact ? 'text-sm text-slate-700' : 'pt-0.5 text-xs text-slate-500')}>
-            <span className="truncate">{item.kind === 'file' ? `${item.file.name} · ${formatBytes(item.file.size)}` : item.url}</span>
+            <span className="truncate">{item.kind === 'file' ? `${item.file.name} · ${formatBytes(item.file.size)}` : item.url}</span>
+            {cover && <span className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-semibold text-brand-700 ring-1 ring-brand-200">Cover</span>}
           </p>
           {!compact && <>
           <input required maxLength={160} className="input" aria-label={`Title ${index + 1}`} disabled={locked || done}
@@ -117,7 +137,12 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   const [sameForAll, setSameForAll] = useState(false);
   const [shared, setShared] = useState({ title: '', description: '' });
   const [tags, setTags] = useState(() => ({ ...EMPTY_TAGS, language: request?.language || '' }));
-  const useShared = sameForAll && items.length > 1;
+  const [oneCard, setOneCard] = useState(false);
+  const [asCard, setAsCard] = useState(false);
+  // Id of the card created for "one card" uploads, so retrying failed files adds them to the same card.
+  const groupId = useRef(null);
+  const grouped = oneCard && !parent && items.length > 1;
+  const useShared = (sameForAll || grouped) && items.length > 1;
   const [dupPrompt, setDupPrompt] = useState(null);
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -133,8 +158,10 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
   useEffect(() => () => thumbUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
 
   useEffect(() => {
-    if (items.length < 2) { setSameForAll(false); setShared({ title: '', description: '' }); }
+    if (items.length < 2) { setSameForAll(false); setOneCard(false); setShared({ title: '', description: '' }); }
   }, [items.length]);
+  const anyDone = items.some(item => item.status === 'done');
+  useEffect(() => { if (!anyDone) groupId.current = null; }, [anyDone]);
 
   function addFiles(fileList) {
     const files = [...(fileList || [])];
@@ -217,15 +244,17 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     const pending = itemsRef.current.filter(item => item.status !== 'done');
     if (!pending.length) { setBusy(false); return; }
     let requestId = request?.id;
-    const results = await enqueue(pending.map(item => {
-      const source = useShared ? shared : item;
-      const title = source.title.trim();
+    // In "one card" mode the first item becomes the card (with the shared title) and the rest are added inside it.
+    const job = (item, parentId) => {
+      const part = grouped && parentId;
+      const source = useShared && !part ? shared : item;
+      const title = part ? item.title.trim() || partName(item) : source.title.trim();
       const fields = {
-        title, description: source.description.trim(), ...(parent ? { parentId: parent.id } : {}),
+        title, description: part ? '' : source.description.trim(), ...(parentId ? { parentId } : {}),
         language: tags.language, speaker: tags.speaker.trim(), topics: tags.topics, verses: tags.verses.trim() || detectVerses(title),
         ...(item.fingerprint ? { fingerprint: item.fingerprint } : {}),
         // Only one upload answers the request; it is marked fulfilled when that upload is approved.
-        ...(requestId && !parent ? { requestId } : {}),
+        ...(requestId && !parentId ? { requestId } : {}),
       };
       requestId = null;
       update(item.key, { status: 'ready', progress: 0, error: '' });
@@ -236,7 +265,18 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
           status: status === 'queued' ? 'ready' : status, progress, error: status === 'error' ? message : '',
         }),
       };
-    }));
+    };
+    let parentId = parent?.id || (grouped ? groupId.current : null);
+    let rest = pending;
+    const results = [];
+    if (grouped && !parentId) {
+      const [first] = await enqueue([job(pending[0], null)]);
+      results.push(first);
+      rest = pending.slice(1);
+      if (first.status === 'done' && first.contentId) groupId.current = parentId = first.contentId;
+    }
+    const cardFailed = grouped && !parentId;
+    if (!cardFailed) results.push(...await enqueue(rest.map(item => job(item, parentId))));
     const ok = results.filter(result => result.status === 'done').length;
     const failed = results.length - ok;
     if (!mounted.current) return;
@@ -244,26 +284,32 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
     setBusy(false);
     if (ok) { onChanged?.(); refreshFacets(); }
     setPublished(results.some(result => result.contentStatus === 'approved'));
-    if (failed) {
+    if (cardFailed) {
+      setError('The first item could not be submitted, so the others were not sent. Fix it and submit again.');
+      toast('Upload failed', 'error');
+    } else if (failed) {
       setError(`${plural(failed, 'item')} could not be submitted. Fix and submit again.`);
       toast(`${plural(failed, 'item')} failed`, 'error');
     } else {
+      setAsCard(grouped);
       setSubmitted(itemsRef.current.length - pending.length + ok);
     }
   }
 
   function reset() {
-    setSubmitted(0); setItems([]); setLinks(''); setError(''); setMode('file'); setSameForAll(false); setShared({ title: '', description: '' }); setTags(EMPTY_TAGS);
+    setSubmitted(0); setItems([]); setLinks(''); setError(''); setMode('file'); setSameForAll(false); setOneCard(false); setAsCard(false); setShared({ title: '', description: '' }); setTags(EMPTY_TAGS);
+    groupId.current = null;
     if (request) onClearRequest?.();
   }
 
   if (submitted) {
+    const what = asCard ? `1 card with ${plural(submitted, 'item')}` : plural(submitted, 'item');
     return (
       <div className="mx-auto max-w-lg">
         <div className="card p-8 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><CheckCircle2 className="h-7 w-7" /></div>
           <h2 className="text-lg font-semibold text-slate-900">
-            {parent ? `${plural(submitted, 'item')} added to “${parent.title}”` : `${plural(submitted, 'item')} ${published ? 'published' : 'submitted for review'}`}
+            {parent ? `${plural(submitted, 'item')} added to “${parent.title}”` : `${what} ${published ? 'published' : 'submitted for review'}`}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             {published ? 'As an admin, your contributions are live in the library right away.'
@@ -364,35 +410,38 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
                 </p>
                 {!busy && <button type="button" onClick={() => { setItems(list => list.filter(item => item.status === 'done')); setError(''); }} className="text-xs font-medium text-slate-500 hover:text-rose-600">Clear all</button>}
               </div>
-              {items.length > 1 && (
-                <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-200">
-                  <span className="text-sm font-medium text-slate-800">Same title and description for all</span>
-                  <input type="checkbox" role="switch" className="sr-only" checked={sameForAll} disabled={busy}
-                    onChange={e => {
-                      const on = e.target.checked;
-                      setSameForAll(on);
-                      const first = remaining[0];
-                      if (on && first && !shared.title && !shared.description) setShared({ title: first.title, description: first.description });
-                    }} />
-                  <span aria-hidden="true" className={cx('relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors',
-                    sameForAll ? 'bg-voice' : 'bg-slate-300')}>
-                    <span className={cx('h-5 w-5 rounded-full bg-white shadow transition-transform', sameForAll && 'translate-x-5')} />
-                  </span>
-                </label>
+              {items.length > 1 && !parent && (
+                <Toggle label="Put everything in one card" hint="The first item is the cover; the rest are shown inside the same card."
+                  checked={oneCard} disabled={busy || anyDone}
+                  onChange={on => {
+                    setOneCard(on);
+                    if (on) setSameForAll(false);
+                    const first = remaining[0];
+                    if (on && first && !shared.title && !shared.description) setShared({ title: first.title, description: first.description });
+                  }} />
+              )}
+              {items.length > 1 && !grouped && (
+                <Toggle label="Same title and description for all" checked={sameForAll} disabled={busy}
+                  onChange={on => {
+                    setSameForAll(on);
+                    const first = remaining[0];
+                    if (on && first && !shared.title && !shared.description) setShared({ title: first.title, description: first.description });
+                  }} />
               )}
               {useShared && (
                 <div className="space-y-2 rounded-xl border border-brand-200 bg-brand-50/40 p-3 sm:p-4">
-                  <input required maxLength={160} className="input" aria-label="Title for all" disabled={busy}
-                    placeholder="Title for all, e.g. Gita class series – Chapter 2"
+                  {grouped && <p className="flex items-center gap-1.5 text-xs font-semibold text-brand-800"><Layers className="h-3.5 w-3.5" /> Card details</p>}
+                  <input required maxLength={160} className="input" aria-label={grouped ? 'Card title' : 'Title for all'} disabled={busy}
+                    placeholder={grouped ? 'Card title, e.g. Gita class – Chapter 2 (audio, slides and notes)' : 'Title for all, e.g. Gita class series – Chapter 2'}
                     value={shared.title} onChange={e => setShared({ ...shared, title: e.target.value })} />
-                  <textarea rows={3} maxLength={2000} className="input resize-y" aria-label="Description for all" disabled={busy}
-                    placeholder="Description for all, e.g. Bhagavad Gita chapter 2 classes. Speaker: Name. Language: Hindi."
+                  <textarea rows={3} maxLength={2000} className="input resize-y" aria-label={grouped ? 'Card description' : 'Description for all'} disabled={busy}
+                    placeholder={grouped ? 'Card description, e.g. Sunday class on chapter 2. Speaker: Name. Language: Hindi.' : 'Description for all, e.g. Bhagavad Gita chapter 2 classes. Speaker: Name. Language: Hindi.'}
                     value={shared.description} onChange={e => setShared({ ...shared, description: e.target.value })} />
                 </div>
               )}
               <ul className={useShared ? 'space-y-2' : 'space-y-3'}>
                 {items.map((item, index) => (
-                  <QueueItem key={item.key} item={item} index={index} locked={busy} compact={useShared} canCopy={remaining.length > 1}
+                  <QueueItem key={item.key} item={item} index={index} locked={busy} compact={useShared} canCopy={remaining.length > 1} cover={grouped && index === 0}
                     onChange={patch => update(item.key, patch)}
                     onRemove={() => setItems(list => list.filter(other => other.key !== item.key))}
                     onCopyDescription={() => setItems(list => list.map(other => (other.status === 'done' ? other : { ...other, description: item.description })))} />
@@ -407,7 +456,7 @@ export default function Upload({ user, navigate, onChanged, parent, onClearParen
           {busy && <p className="mr-auto text-xs text-slate-500">You can leave this page. Uploads continue in the background.</p>}
           {!busy && <Button variant="secondary" onClick={() => navigate('library')}>Cancel</Button>}
           <Button type="submit" icon={UploadCloud} loading={busy} disabled={!remaining.length}>
-            {busy ? 'Uploading…' : remaining.length > 1 ? `Upload ${remaining.length} items` : 'Upload'}
+            {busy ? 'Uploading…' : grouped && !anyDone ? 'Upload as one card' : remaining.length > 1 ? `Upload ${remaining.length} items` : 'Upload'}
           </Button>
         </div>
       </form>

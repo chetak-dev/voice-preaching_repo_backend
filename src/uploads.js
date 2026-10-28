@@ -93,7 +93,7 @@ function settle(job, status, error = '', result = null) {
   patch(job.id, { status, error, progress: status === 'done' ? 100 : find(job.id)?.progress || 0, published: result?.status === 'approved' });
   if (job.kind === 'file') saved.remove(job.id);
   if (status === 'done') attachThumbnail(find(job.id) || job, result?.id);
-  job.resolve?.({ id: job.id, key: job.key, status, error, contentStatus: result?.status });
+  job.resolve?.({ id: job.id, key: job.key, status, error, contentStatus: result?.status, contentId: result?.id });
   notify(find(job.id));
 }
 

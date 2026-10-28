@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bookmark, Check, Download, ExternalLink, Eye, Layers, Pencil, Play, Plus, Share2 } from 'lucide-react';
+import { Bookmark, Check, Combine, Download, ExternalLink, Eye, Layers, ListChecks, Pencil, Play, Plus, Search, Share2, X } from 'lucide-react';
 import { api, fileUrl, thumbnailUrl } from '../api.js';
 import { useMediaPlayer } from './MediaPlayer.jsx';
 import FullPreview from './FullPreview.jsx';
@@ -143,46 +143,104 @@ export function ContentCard({ item, onPreview, onBookmark, onShare, showStatus, 
   );
 }
 
-function UploadParts({ item, user, onAddTo }) {
+// Files are saved one after another; browsers may ask once to allow several downloads.
+async function downloadFiles(list) {
+  for (const [index, entry] of list.entries()) {
+    const link = document.createElement('a');
+    link.href = fileUrl(entry.id);
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    if (index < list.length - 1) await new Promise(resolve => { setTimeout(resolve, 900); });
+  }
+}
+
+function UploadParts({ item, user, onAddTo, onMerge }) {
   const { openPlayer } = useMediaPlayer();
   const [parts, setParts] = useState(null);
+  const [picking, setPicking] = useState(false);
+  const [chosen, setChosen] = useState([]);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     let live = true;
-    setParts(null);
+    setParts(null); setPicking(false); setChosen([]);
     api(`/content/${item.id}/parts`).then(data => live && setParts(data.items)).catch(() => live && setParts([]));
     return () => { live = false; };
   }, [item.id]);
   const canAdd = onAddTo && user && (item.status === 'approved' || (item.uploader_id === user.id && item.status === 'pending'));
-  if (!parts?.length && !canAdd) return null;
+  if (!parts?.length && !canAdd && !onMerge) return null;
+  const files = [item, ...(parts || [])].filter(entry => entry.type !== 'link');
+  const canPick = files.length > 1;
+  const toggle = id => setChosen(current => (current.includes(id) ? current.filter(other => other !== id) : [...current, id]));
+  const allChosen = chosen.length === files.length;
+  async function save() {
+    setSaving(true);
+    try { await downloadFiles(files.filter(entry => chosen.includes(entry.id))); } finally { setSaving(false); }
+  }
+  const rows = picking ? [{ ...item, main: true }, ...parts] : parts || [];
   return (
     <section className="mt-5 border-t border-slate-100 pt-4" aria-label="Files in this upload">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-          <Layers className="h-4 w-4 text-slate-400" /> More in this upload{parts?.length ? ` (${parts.length})` : ''}
+          <Layers className="h-4 w-4 text-slate-400" /> {picking ? 'Choose files to download' : `More in this upload${parts?.length ? ` (${parts.length})` : ''}`}
         </h3>
-        {canAdd && <Button variant="secondary" size="sm" icon={Plus} onClick={() => onAddTo(item)}>Add files</Button>}
+        <div className="flex flex-wrap items-center gap-2">
+          {picking ? (
+            <>
+              <button type="button" onClick={() => setChosen(allChosen ? [] : files.map(entry => entry.id))} className="text-xs font-medium text-brand-700 hover:text-brand-800">
+                {allChosen ? 'Clear' : 'Select all'}
+              </button>
+              <Button variant="secondary" size="sm" onClick={() => { setPicking(false); setChosen([]); }}>Cancel</Button>
+            </>
+          ) : (
+            <>
+              {canPick && <Button variant="secondary" size="sm" icon={ListChecks} onClick={() => setPicking(true)}>Choose files</Button>}
+              {onMerge && <Button variant="secondary" size="sm" icon={Combine} onClick={onMerge}>Merge cards</Button>}
+              {canAdd && <Button variant="secondary" size="sm" icon={Plus} onClick={() => onAddTo(item)}>Add files</Button>}
+            </>
+          )}
+        </div>
       </div>
       {parts === null ? (
         <div className="space-y-2" role="status" aria-label="Loading">
           {[0, 1].map(i => <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-100" />)}
         </div>
-      ) : !parts.length ? (
+      ) : !rows.length ? (
         <p className="text-sm text-slate-500">Have another part, slides or a related link? Add it here. It will appear after admin approval.</p>
       ) : (
         <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-          {parts.map(part => {
+          {rows.map(part => {
             const meta = TYPE_META[part.type] || TYPE_META.link;
             const media = part.type === 'audio' || part.type === 'video';
             const href = part.type === 'link' ? part.url : fileUrl(part.id, Boolean(MIME_INLINE[part.mime]));
-            return (
-              <li key={part.id} className="flex items-center gap-3 px-3 py-2.5">
+            const pickable = picking && part.type !== 'link';
+            const info = (
+              <>
                 <div className={cx('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', meta.tone)}><meta.icon className="h-4 w-4" /></div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-slate-900">{part.title}</p>
                   <p className="truncate text-xs text-slate-500">
-                    {part.type === 'link' ? hostOf(part.url) : formatBytes(part.size)} · {part.uploader}
+                    {part.main ? 'Main file · ' : ''}{part.type === 'link' ? hostOf(part.url) : formatBytes(part.size)}{part.main ? '' : ` · ${part.uploader}`}
                   </p>
                 </div>
+              </>
+            );
+            if (picking) {
+              return (
+                <li key={part.id}>
+                  <label className={cx('flex items-center gap-3 px-3 py-2.5', pickable ? 'cursor-pointer hover:bg-slate-50' : 'opacity-50')}>
+                    <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand-600" disabled={!pickable}
+                      checked={chosen.includes(part.id)} onChange={() => toggle(part.id)} aria-label={`Select ${part.title}`} />
+                    {info}
+                    {!pickable && <span className="shrink-0 text-xs text-slate-500">Link</span>}
+                  </label>
+                </li>
+              );
+            }
+            return (
+              <li key={part.id} className="flex items-center gap-3 px-3 py-2.5">
+                {info}
                 {part.status !== 'approved' && <Badge tone={STATUS_META[part.status].tone}>{STATUS_META[part.status].label}</Badge>}
                 {media ? (
                   <button type="button" onClick={() => openPlayer(part)} className="rounded-lg p-2 text-brand-700 hover:bg-brand-50" aria-label={`Play ${part.title}`}><Play className="h-4 w-4" /></button>
@@ -199,10 +257,17 @@ function UploadParts({ item, user, onAddTo }) {
           })}
         </ul>
       )}
+      {picking && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-slate-500">If your browser asks, allow it to download multiple files.</p>
+          <Button size="sm" icon={Download} loading={saving} disabled={!chosen.length} onClick={save} className="ml-auto">
+            {chosen.length ? `Download ${chosen.length} ${chosen.length === 1 ? 'file' : 'files'}` : 'Download'}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
-
 const MIME_INLINE = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'application/pdf': 1, 'text/plain': 1 };
 
 export function EditContentModal({ item, onClose, onSaved }) {
@@ -243,13 +308,20 @@ export function EditContentModal({ item, onClose, onSaved }) {
   );
 }
 
-export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, onEdited, onPickTag }) {
+export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, onEdited, onMerged, onPickTag }) {
   const { openPlayer } = useMediaPlayer();
   const [editing, setEditing] = useState(null);
+  const [merging, setMerging] = useState(false);
+  const [partsVersion, setPartsVersion] = useState(0);
+  useEffect(() => { setMerging(false); }, [item?.id]);
   if (!item) return null;
   const canEdit = onEdited && ['site_admin', 'org_admin'].includes(user?.role);
+  const canMerge = onMerged && ['site_admin', 'org_admin'].includes(user?.role) && !item.parent_id && item.status !== 'rejected';
   if (canEdit && editing) {
     return <EditContentModal item={editing} onClose={() => setEditing(null)} onSaved={changes => { setEditing(null); onEdited(item, changes); }} />;
+  }
+  if (canMerge && merging) {
+    return <MergeModal item={item} onClose={() => setMerging(false)} onMerged={count => { setMerging(false); setPartsVersion(v => v + 1); onMerged(item, count); }} />;
   }
   const meta = TYPE_META[item.type] || TYPE_META.link;
   const isMedia = item.type === 'audio' || item.type === 'video';
@@ -276,8 +348,94 @@ export function PreviewModal({ item, onClose, actions, onShare, user, onAddTo, o
       {item.description && <p className="mt-4 whitespace-pre-line text-sm text-slate-600">{item.description}</p>}
       <TagChips item={item} onPick={onPickTag ? (key, value) => { onClose(); onPickTag(key, value); } : undefined} className="mt-4" />
       {item.parent_title && <p className="mt-4 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-900">Added to the upload <span className="font-semibold">“{item.parent_title}”</span></p>}
-      {!item.parent_id && item.status !== 'rejected' && <UploadParts item={item} user={user} onAddTo={onAddTo} />}
+      {!item.parent_id && item.status !== 'rejected' && (
+        <UploadParts key={partsVersion} item={item} user={user} onAddTo={onAddTo} onMerge={canMerge ? () => setMerging(true) : undefined} />
+      )}
 
+    </Modal>
+  );
+}
+
+// Admins pick other library cards to fold into this one; their files then appear under "More in this upload".
+function MergeModal({ item, onClose, onMerged }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState(null);
+  const [chosen, setChosen] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let live = true;
+    const q = query.trim();
+    const timer = setTimeout(() => {
+      api(`/content?scope=library&limit=40${q ? `&q=${encodeURIComponent(q)}` : ''}`)
+        .then(data => live && setResults(data.items.filter(other => other.id !== item.id)))
+        .catch(err => { if (live) { setResults([]); setError(err.message); } });
+    }, q ? 250 : 0);
+    return () => { live = false; clearTimeout(timer); };
+  }, [query, item.id]);
+  const picked = id => chosen.some(other => other.id === id);
+  const toggle = other => setChosen(current => (picked(other.id) ? current.filter(entry => entry.id !== other.id) : [...current, other]));
+  async function merge() {
+    setBusy(true); setError('');
+    try {
+      const result = await api(`/content/${item.id}/merge`, { method: 'POST', body: { ids: chosen.map(other => other.id) } });
+      onMerged(result.merged);
+    } catch (err) { setError(err.message); setBusy(false); }
+  }
+  return (
+    <Modal open onClose={busy ? () => {} : onClose} size="md" title="Merge cards"
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button icon={Combine} loading={busy} disabled={!chosen.length} onClick={merge}>
+            {chosen.length ? `Merge ${chosen.length} ${chosen.length === 1 ? 'card' : 'cards'}` : 'Merge'}
+          </Button>
+        </>
+      )}>
+      <p className="text-sm text-slate-600">
+        Choose cards to move inside <span className="font-semibold text-slate-900">“{item.title}”</span>. They stop showing as separate cards, and their files (with anything already inside them) appear in this card.
+      </p>
+      <div className="relative mt-4">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input className="input pl-9" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search the library" aria-label="Search cards to merge" autoFocus />
+      </div>
+      {chosen.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {chosen.map(other => (
+            <button key={other.id} type="button" onClick={() => toggle(other)}
+              className="inline-flex max-w-full items-center gap-1 rounded-full bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-800 ring-1 ring-brand-200 hover:bg-brand-100">
+              <span className="truncate">{other.title}</span><X className="h-3 w-3 shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="mt-3 max-h-[45vh] overflow-y-auto rounded-xl border border-slate-200">
+        {results === null ? (
+          <div className="space-y-2 p-2" role="status" aria-label="Loading">{[0, 1, 2].map(i => <div key={i} className="h-12 animate-pulse rounded-lg bg-slate-100" />)}</div>
+        ) : !results.length ? (
+          <p className="px-3 py-6 text-center text-sm text-slate-500">No other cards found.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {results.map(other => {
+              const meta = TYPE_META[other.type] || TYPE_META.link;
+              return (
+                <li key={other.id}>
+                  <label className="flex cursor-pointer items-center gap-3 px-3 py-2.5 hover:bg-slate-50">
+                    <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand-600"
+                      checked={picked(other.id)} onChange={() => toggle(other)} aria-label={`Select ${other.title}`} />
+                    <ContentThumb item={other} className="h-9 w-14 shrink-0 rounded-md" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-slate-900">{other.title}</span>
+                      <span className="block truncate text-xs text-slate-500">{meta.label}{other.parts > 0 ? ` · +${other.parts} inside` : ''} · {other.uploader}</span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
     </Modal>
   );
 }

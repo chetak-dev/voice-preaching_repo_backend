@@ -1046,6 +1046,39 @@ export function createApp(overrides = {}) {
     res.json({ ok: true, visibility });
   }));
 
+  // Admins can fold separately uploaded cards (and anything already inside them) into one card.
+  app.post('/api/content/:id/merge', h(async (req, res) => {
+    if (!isReviewer(req.user)) throw fail(403, 'Only admins can merge uploads.');
+    const { item: target } = await getContent(req);
+    if (target.parent_id) throw fail(400, 'Choose a main upload to merge into.');
+    if (target.status === 'rejected') throw fail(409, 'Rejected uploads cannot receive more files.');
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 25 || ids.some(id => typeof id !== 'string')) throw fail(400, 'Choose up to 25 uploads to merge.');
+    const sources = [];
+    for (const id of new Set(ids)) {
+      if (id === target.id) throw fail(400, 'An upload cannot be merged into itself.');
+      const { item } = await getContent(req, id);
+      if (item.parent_id) throw fail(409, `“${item.title}” is already inside another upload.`);
+      if (item.status === 'rejected') throw fail(409, `“${item.title}” was rejected and cannot be merged.`);
+      sources.push(item);
+    }
+    const now = Date.now();
+    for (const source of sources) {
+      const moved = await db.run(`UPDATE content SET parent_id = ? WHERE id = ? AND parent_id IS NULL AND status != 'rejected'
+        AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`, target.id, source.id, now);
+      if (!moved.changes) throw fail(409, `“${source.title}” changed while merging. Refresh and try again.`);
+      await db.run('UPDATE content SET parent_id = ? WHERE parent_id = ?', target.id, source.id);
+      // Saved cards stay saved: bookmarks move to the card they now belong to.
+      await db.run('INSERT OR IGNORE INTO bookmarks (user_id, content_id) SELECT user_id, ? FROM bookmarks WHERE content_id = ?', target.id, source.id);
+      await db.run('DELETE FROM bookmarks WHERE content_id = ?', source.id);
+      if (source.uploader_id !== req.user.id) {
+        await notify(source.uploader_id, 'merged', `Moved: ${source.title}`, `It is now part of “${target.title}”.`, target.id);
+      }
+    }
+    await audit(db, req.user.id, 'Merged uploads', `${sources.map(item => item.title).join(', ')} → ${target.title}`.slice(0, 500));
+    res.json({ ok: true, merged: sources.length });
+  }));
+
   app.post('/api/content/:id/bookmark', h(async (req, res) => {
     const { item } = await getContent(req);
     if (item.status !== 'approved' || item.visibility !== 'public' || item.parent_id) throw fail(400, 'Only public, approved uploads can be saved.');
@@ -1198,6 +1231,23 @@ export function createApp(overrides = {}) {
     if (suspended) await db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
     await audit(db, req.user.id, suspended ? 'Suspended member' : 'Reactivated member', user.email);
     res.json({ ok: true });
+  }));
+  // Groups of uploads that share the same file or link (rejected ones are ignored). Site admins only.
+  app.get('/api/duplicates', siteAdmin, h(async (req, res) => {
+    const rows = await db.all(`${contentQuery} WHERE c.status != 'rejected' AND (
+        c.fingerprint IN (SELECT fingerprint FROM content WHERE status != 'rejected' AND fingerprint IS NOT NULL GROUP BY fingerprint HAVING count(*) > 1)
+        OR (c.type = 'link' AND c.url IN (SELECT url FROM content WHERE status != 'rejected' AND type = 'link' AND url IS NOT NULL GROUP BY url HAVING count(*) > 1)))
+      ORDER BY c.created_at`, req.user.id);
+    const groups = new Map();
+    for (const row of rows) {
+      const key = row.fingerprint ? `f:${row.fingerprint}` : `u:${row.url}`;
+      if (!groups.has(key)) groups.set(key, { key, isLink: !row.fingerprint, items: [] });
+      groups.get(key).items.push(strip(row));
+    }
+    const list = [...groups.values()].filter(group => group.items.length > 1)
+      .sort((a, b) => b.items.at(-1).created_at.localeCompare(a.items.at(-1).created_at))
+      .map(({ key, ...group }) => ({ id: group.items[0].id, ...group }));
+    res.json({ groups: list });
   }));
   app.get('/api/audit', siteAdmin, h(async (req, res) => res.json({
     entries: await db.all(`SELECT a.*, u.name AS actor FROM audit a JOIN users u ON u.id = a.actor_id

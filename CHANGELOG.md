@@ -2,6 +2,13 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.7
+
+- New site-admin-only **Duplicates** page listing uploads that share the same file or link, with preview and remove.
+- Contribute: **Put everything in one card** switch uploads several files/links as a single card (first item is the cover).
+- Preview: **Choose files** lets people download only the files they need from a card.
+- Admins can **Merge cards**: move separately uploaded cards (and their files) into one card. Uploaders are notified.
+
 ## 1.7.6
 
 - Edit details now shows only title and description (existing tags are kept).

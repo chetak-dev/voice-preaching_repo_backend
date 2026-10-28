@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  Bell, Bookmark, ChevronDown, ClipboardCheck, CloudDownload, CloudOff, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, MessageSquarePlus, Monitor,
+  Bell, Bookmark, ChevronDown, ClipboardCheck, CloudDownload, CopyCheck, CloudOff, Download, FileClock, FolderOpen, HardDrive, History, LogOut, Menu, MessageSquarePlus, Monitor,
   Moon, PieChart, Plus, RefreshCw, Share, Sun, Trophy, UploadCloud, Users, X,
 } from 'lucide-react';
 import { api } from './api.js';
@@ -16,6 +16,7 @@ import { PersistentMediaPlayer, useMediaPlayer } from './components/MediaPlayer.
 import UploadTray from './components/UploadTray.jsx';
 import Activity from './views/Activity.jsx';
 import Downloads from './views/Downloads.jsx';
+import Duplicates from './views/Duplicates.jsx';
 import Notifications from './views/Notifications.jsx';
 import Requests from './views/Requests.jsx';
 import Library from './views/Library.jsx';
@@ -39,13 +40,14 @@ const ITEMS = {
   downloads: { label: 'Downloads', icon: CloudDownload, tone: 'bg-lime-500/15 text-lime-300', soft: 'bg-lime-50 text-lime-600' },
   leaderboard: { label: 'Leaderboard', short: 'Top 10', icon: Trophy, tone: 'bg-yellow-500/15 text-yellow-300', soft: 'bg-yellow-50 text-yellow-600' },
   review: { label: 'Review queue', short: 'Review', icon: ClipboardCheck, roles: ['site_admin', 'org_admin'], badge: 'pending', tone: 'bg-orange-500/15 text-orange-300', soft: 'bg-orange-50 text-orange-600' },
+  duplicates: { label: 'Duplicates', icon: CopyCheck, roles: ['site_admin'], tone: 'bg-amber-500/15 text-amber-300', soft: 'bg-amber-50 text-amber-600' },
   members: { label: 'Members', icon: Users, roles: ['site_admin'], tone: 'bg-emerald-500/15 text-emerald-300', soft: 'bg-emerald-50 text-emerald-600' },
   storage: { label: 'Storage', icon: HardDrive, roles: ['site_admin'], tone: 'bg-cyan-500/15 text-cyan-300', soft: 'bg-cyan-50 text-cyan-600' },
   activity: { label: 'Activity log', short: 'Activity', icon: History, roles: ['site_admin'], tone: 'bg-indigo-500/15 text-indigo-300', soft: 'bg-indigo-50 text-indigo-600' },
 };
 const SECTIONS = [
   ['Content', ['library', 'notifications', 'overview', 'upload', 'mine', 'saved', 'requests', 'downloads', 'leaderboard']],
-  ['Administration', ['review', 'members', 'storage', 'activity']],
+  ['Administration', ['review', 'duplicates', 'members', 'storage', 'activity']],
 ];
 const BOTTOM_NAV = {
   site_admin: ['library', 'review', 'members'],
@@ -268,6 +270,7 @@ function Shell({ user, config, onSignOut }) {
     notifications: <Notifications {...props} notifications={notifications} onOpenContent={openContent} />,
     downloads: <Downloads {...props} />,
     review: <Review {...props} />,
+    duplicates: <Duplicates {...props} />,
     members: <Members {...props} />,
     storage: <Storage {...props} />,
     activity: <Activity {...props} />,

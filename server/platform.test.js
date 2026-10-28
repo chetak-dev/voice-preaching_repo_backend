@@ -916,6 +916,56 @@ test('the review queue flags submissions that duplicate existing content', async
   for (const id of [original.id, copy.id, fresh.id]) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
 });
 
+test('only site admins see the list of duplicate uploads', async () => {
+  const user = await signIn('user');
+  const org = await signIn('org_admin');
+  const admin = await signIn('site_admin');
+  const first = (await user('/api/content', { method: 'POST', body: { title: 'Dup A', url: 'https://example.org/dup-list' } })).json;
+  const second = (await user('/api/content', { method: 'POST', body: { title: 'Dup B', url: 'https://example.org/dup-list' } })).json;
+  const single = (await user('/api/content', { method: 'POST', body: { title: 'Only one', url: 'https://example.org/dup-single' } })).json;
+  assert.equal((await user('/api/duplicates')).status, 403);
+  assert.equal((await org('/api/duplicates')).status, 403);
+  const { groups } = (await admin('/api/duplicates')).json;
+  const group = groups.find(entry => entry.items.some(item => item.id === first.id));
+  assert.deepEqual(group.items.map(item => item.id), [first.id, second.id]);
+  assert.equal(group.isLink, true);
+  assert.equal(group.items[0].fingerprint, undefined);
+  assert.ok(!groups.some(entry => entry.items.some(item => item.id === single.id)));
+  for (const id of [first.id, second.id, single.id]) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
+});
+
+test('admins can merge separate uploads into one card, moving their parts and bookmarks', async () => {
+  const user = await signIn('user');
+  const viewer = await signIn('viewer@example.test');
+  const org = await signIn('org_admin');
+  const admin = await signIn('site_admin');
+  const make = async (title, extra = {}) => (await admin('/api/content', { method: 'POST', body: { title, url: `https://example.org/${encodeURIComponent(title)}`, ...extra } })).json;
+  const main = await make('Merge main');
+  const other = await make('Merge other');
+  const otherPart = await make('Merge other part', { parentId: other.id });
+  const mine = (await user('/api/content', { method: 'POST', body: { title: 'Merge member', url: 'https://example.org/merge-member' } })).json;
+  await viewer(`/api/content/${other.id}/bookmark`, { method: 'POST' });
+
+  assert.equal((await user(`/api/content/${main.id}/merge`, { method: 'POST', body: { ids: [other.id] } })).status, 403);
+  assert.equal((await admin(`/api/content/${main.id}/merge`, { method: 'POST', body: { ids: [main.id] } })).status, 400);
+  assert.equal((await admin(`/api/content/${otherPart.id}/merge`, { method: 'POST', body: { ids: [main.id] } })).status, 400);
+  assert.equal((await admin(`/api/content/${main.id}/merge`, { method: 'POST', body: { ids: [otherPart.id] } })).status, 409);
+
+  const merged = await org(`/api/content/${main.id}/merge`, { method: 'POST', body: { ids: [other.id, mine.id] } });
+  assert.equal(merged.status, 200);
+  assert.equal(merged.json.merged, 2);
+  const parts = (await admin(`/api/content/${main.id}/parts`)).json.items.map(item => item.id).sort();
+  assert.deepEqual(parts, [other.id, otherPart.id, mine.id].sort());
+  const library = (await viewer('/api/content?scope=library')).json.items;
+  assert.ok(library.some(item => item.id === main.id));
+  assert.ok(!library.some(item => item.id === other.id), 'merged cards leave the library list');
+  const saved = (await viewer('/api/content?scope=saved')).json.items.map(item => item.id);
+  assert.ok(saved.includes(main.id) && !saved.includes(other.id), 'bookmarks move to the main card');
+  assert.ok((await user('/api/notifications')).json.items.some(item => item.kind === 'merged' && item.content_id === main.id));
+  assert.equal((await admin(`/api/content/${main.id}`, { method: 'DELETE', body: REASON })).status, 200);
+  assert.equal((await admin(`/api/content/${mine.id}`)).status, 404, 'removing the card removes merged parts');
+});
+
 test('admins get analytics in the overview; members do not', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');
