@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.13
+
+- The logo now reads "Spiritual Content Hub" under Kalpa Taru, spread to the same width as the name.
+
 ## 1.7.12
 
 - Share to Kalpa Taru from other apps on Android: once the app is installed, pick Kalpa Taru in any app's share menu and the shared files or links open on the Contribute page, ready for a title and description.

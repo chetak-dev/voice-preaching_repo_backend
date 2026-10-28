@@ -49,17 +49,21 @@ export function LogoMark({ className }) {
 
 export const APP_NAME = 'Kalpa Taru';
 export const APP_ORG = 'ISKCON Brahmapur';
+export const APP_TAGLINE = 'Spiritual Content Hub';
 
 export function Logo({ size = 'md', light = false, textClassName }) {
   const box = size === 'lg' ? 'h-11 w-11 rounded-2xl' : size === 'sm' ? 'h-8 w-8 rounded-xl' : 'h-9 w-9 rounded-xl';
   return (
     <div className="flex items-center gap-2.5">
       <LogoMark className={cx('shrink-0 shadow-glow', box, light && 'ring-2 ring-white/30')} />
-      <div className={cx('flex flex-col justify-center gap-[5px] leading-none', textClassName)}>
-        <p className={cx('whitespace-nowrap font-brand font-semibold uppercase leading-none tracking-[0.08em]', size === 'lg' ? 'text-[22px]' : size === 'sm' ? 'text-[17px]' : 'text-[18px]',
+      <div className={cx('flex w-max flex-col justify-center gap-[5px] leading-none', textClassName)}>
+        <p className={cx('whitespace-nowrap font-brand font-semibold uppercase leading-none tracking-[0.08em] -mr-[0.08em]', size === 'lg' ? 'text-[22px]' : size === 'sm' ? 'text-[17px]' : 'text-[18px]',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
-        <p className={cx('whitespace-nowrap uppercase leading-none', 'font-medium tracking-[0.1em]', size === 'lg' ? 'text-[12px]' : size === 'sm' ? 'text-[9.5px]' : 'text-[10px]',
-          light ? 'text-white/70' : 'text-slate-500')}>{APP_ORG}</p>
+        {/* Letters are spread evenly so the tagline is exactly as wide as the name above it. */}
+        <p aria-label={APP_TAGLINE} className={cx('flex w-0 min-w-full justify-between whitespace-nowrap font-medium uppercase leading-none',
+          size === 'lg' ? 'text-[10.5px]' : size === 'sm' ? 'text-[8px]' : 'text-[8.5px]', light ? 'text-white/70' : 'text-slate-500')}>
+          {[...APP_TAGLINE].map((letter, index) => <span key={index} aria-hidden="true">{letter === ' ' ? '\u00a0' : letter}</span>)}
+        </p>
       </div>
     </div>
   );
