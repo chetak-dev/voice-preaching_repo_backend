@@ -431,15 +431,12 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
         <div className="flex items-center gap-2 sm:hidden">
           <select className="input min-w-0 flex-1" value={type} onChange={e => setType(e.target.value)} aria-label="Content type">
             {['all', ...Object.keys(TYPE_META)].map(key => (
-              <option key={key} value={key}>{key === 'all' ? 'All types' : TYPE_META[key].plural} ({key === 'all' ? countAll : counts[key] || 0})</option>
+              <option key={key} value={key}>{key === 'all' ? 'All' : TYPE_META[key].plural} ({key === 'all' ? countAll : counts[key] || 0})</option>
             ))}
           </select>
-          <div className="relative min-w-0 flex-1">
-            <ArrowDownWideNarrow className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <select className="input w-full pl-9" value={sort} onChange={e => changeSort(e.target.value)} aria-label="Sort by">
-              {Object.entries(SORTS).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
-            </select>
-          </div>
+          <select className="input w-[8.5rem] shrink-0" value={sort} onChange={e => changeSort(e.target.value)} aria-label="Sort by">
+            {Object.entries(SORTS).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
+          </select>
           <LayoutToggle layout={layout} onChange={setLayout} className="flex" />
         </div>
         {scope === 'mine' && (
@@ -535,8 +532,8 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
           {filtered.map(item => {
             const meta = TYPE_META[item.type];
             return (
-              <div key={item.id} className="flex items-center gap-4 px-4 py-3">
-                <button type="button" onClick={() => openItem(item)} className="h-12 w-16 shrink-0 overflow-hidden rounded-md" aria-label={`Preview ${item.title}`}>
+              <div key={item.id} className="flex items-start gap-3 px-4 py-3 sm:gap-4">
+                <button type="button" onClick={() => openItem(item)} className="mt-0.5 h-14 w-20 shrink-0 overflow-hidden rounded-md" aria-label={`Preview ${item.title}`}>
                   <ContentThumb item={item} className="h-full w-full [&_svg]:h-5 [&_svg]:w-5" />
                 </button>
                 <div className="min-w-0 flex-1">
@@ -550,23 +547,29 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
                     <p className="mt-1 line-clamp-2 text-xs text-rose-700"><span className="font-medium">Reviewer note:</span> {item.review_note}</p>
                   )}
                   {item.snippet && <p className="mt-1 line-clamp-2 text-xs italic text-slate-500">{item.snippet}</p>}
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <Badge tone={meta.tone} icon={meta.icon}>{meta.label}</Badge>
+                      {scope === 'mine' && <Badge tone={STATUS_META[item.status].tone}>{STATUS_META[item.status].label}</Badge>}
+                    </div>
+                    <div className="-my-1 -mr-2 ml-auto flex shrink-0 items-center">
+                      {canShare(item) && <ShareButton item={item} onShare={share} className="shrink-0 p-2" />}
+                      {item.status === 'approved' && !item.parent_id && (
+                        <button type="button" onClick={() => toggleBookmark(item)}
+                          aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
+                          className={cx('shrink-0 rounded-md p-2 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
+                          <Bookmark className="h-4 w-4" fill={item.bookmarked ? 'currentColor' : 'none'} />
+                        </button>
+                      )}
+                      {scope === 'mine' && canDelete(item) && (
+                        <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} aria-label="Remove" className="text-rose-600 hover:bg-rose-50" />
+                      )}
+                      {scope === 'mine' && !canDelete(item) && canWithdraw(item) && (
+                        <Button variant="ghost" size="sm" icon={Undo2} onClick={() => setWithdrawing(item)} aria-label="Withdraw" title="Withdraw" className="text-slate-600 hover:bg-slate-100" />
+                      )}
+                    </div>
+                  </div>
                 </div>
-                {canShare(item) && <ShareButton item={item} onShare={share} className="shrink-0 p-2" />}
-                {item.status === 'approved' && !item.parent_id && (
-                  <button type="button" onClick={() => toggleBookmark(item)}
-                    aria-label={item.bookmarked ? 'Remove from saved' : 'Save'} aria-pressed={Boolean(item.bookmarked)}
-                    className={cx('shrink-0 rounded-md p-2 transition active:scale-90', item.bookmarked ? 'text-brand-600' : 'text-slate-400 hover:text-slate-700')}>
-                    <Bookmark className="h-4 w-4" fill={item.bookmarked ? 'currentColor' : 'none'} />
-                  </button>
-                )}
-                <Badge tone={meta.tone} icon={meta.icon} className="hidden w-24 justify-center sm:inline-flex">{meta.label}</Badge>
-                {scope === 'mine' && <Badge tone={STATUS_META[item.status].tone}>{STATUS_META[item.status].label}</Badge>}
-                {scope === 'mine' && canDelete(item) && (
-                  <Button variant="ghost" size="sm" icon={Trash2} onClick={() => remove(item)} aria-label="Remove" className="text-rose-600 hover:bg-rose-50" />
-                )}
-                {scope === 'mine' && !canDelete(item) && canWithdraw(item) && (
-                  <Button variant="ghost" size="sm" icon={Undo2} onClick={() => setWithdrawing(item)} aria-label="Withdraw" title="Withdraw" className="text-slate-600 hover:bg-slate-100" />
-                )}
               </div>
             );
           })}
