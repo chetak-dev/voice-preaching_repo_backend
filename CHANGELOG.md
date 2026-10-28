@@ -2,6 +2,10 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.9
+
+- Removed the **Continue listening** card from the top of the library.
+
 ## 1.7.8
 
 - Shared links: anyone can view **and download** approved public content without an account. Private and pending content stays protected.

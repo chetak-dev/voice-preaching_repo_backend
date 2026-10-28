@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { ArrowDownWideNarrow, Bookmark, Clock, CornerDownLeft, Eye, FolderOpen, History, LayoutGrid, Layers, List, Loader2, MessageSquarePlus, Search, Trash2, TrendingUp, Undo2, UploadCloud, User, X } from 'lucide-react';
 import { api } from '../api.js';
 import { ContentCard, ContentThumb, PreviewModal, ShareButton, canShare, shareContent } from '../components/Content.jsx';
-import { useMediaPlayer } from '../components/MediaPlayer.jsx';
 import { useEffect, useRef } from 'react';
 import {
   Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, STATUS_META, Spinner, TYPE_META, cx, timeAgo, useToast,
@@ -12,13 +11,6 @@ import { onThumbnail } from '../uploads.js';
 import { backfillThumbnails } from '../thumbnails.js';
 import { LANGUAGES, useFacets } from '../components/Tags.jsx';
 
-function formatResumeTime(value) {
-  const seconds = Math.max(0, Math.floor(Number(value) || 0));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const rest = seconds % 60;
-  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}` : `${minutes}:${String(rest).padStart(2, '0')}`;
-}
 
 const TITLES = { library: 'Library', saved: 'Saved', mine: 'My submissions' };
 
@@ -301,18 +293,7 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
 
   const withOverrides = useCallback(rows => rows.map(item => ({ ...item, ...overrides[item.id] })), [overrides]);
   const items = useMemo(() => withOverrides(list.items), [list.items, withOverrides]);
-  const { lastContentId, progressById, openPlayer, currentItem } = useMediaPlayer();
   const sharedOpenRef = useRef(null);
-  const [lastPlayed, setLastPlayed] = useState(null);
-  useEffect(() => {
-    if (!home || !lastContentId) { setLastPlayed(null); return undefined; }
-    let live = true;
-    api(`/content/${encodeURIComponent(lastContentId)}`).then(({ item }) => live && setLastPlayed(item)).catch(() => live && setLastPlayed(null));
-    return () => { live = false; };
-  }, [home, lastContentId]);
-  const continueItem = home && lastPlayed && currentItem?.id !== lastContentId && lastPlayed.status === 'approved'
-    && ['audio', 'video'].includes(lastPlayed.type) && lastPlayed.visibility !== 'private' ? lastPlayed : null;
-  const continueProgress = continueItem ? progressById[continueItem.id] : null;
 
   const markThumb = useCallback(id => setOverrides(current => ({ ...current, [id]: { ...current[id], has_thumb: 1 } })), []);
   useEffect(() => onThumbnail(markThumb), [markThumb]);
@@ -427,17 +408,6 @@ export default function Library({ scope, user, navigate, onChanged, onAddTo, sha
         <PageHeader title={TITLES[scope]}
           actions={<Button icon={UploadCloud} onClick={() => navigate('upload')}>Contribute</Button>} />
       </div>
-
-      {continueItem && (
-        <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-brand-100 bg-brand-50 p-4 sm:flex-row sm:items-center sm:justify-between" aria-label="Continue listening">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Continue listening</p>
-            <p className="mt-1 truncate text-sm font-semibold text-slate-900">{continueItem.title}</p>
-            <p className="text-xs text-slate-600">Resume at {formatResumeTime(continueProgress?.currentTime || 0)}</p>
-          </div>
-          <Button variant="secondary" size="sm" onClick={() => openPlayer(continueItem)}>Continue playing</Button>
-        </section>
-      )}
 
       <div className="mb-5 space-y-3">
         <div className="flex items-center gap-2">
