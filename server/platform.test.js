@@ -841,6 +841,31 @@ test('document text is searchable with a snippet and only the uploader or an adm
   assert.equal((await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON })).status, 200, 'content with text can be removed');
 });
 
+test('search ignores accents in titles, descriptions and document text', async () => {
+  const user = await signIn('user');
+  const admin = await signIn('site_admin');
+  const link = (await admin('/api/content', { method: 'POST', body: { title: 'Yadā yadā hi dharmasya', description: 'Śrī Kṛṣṇa explains', url: 'https://example.org/bg-4-7' } })).json;
+  const search = async (q, extra = '') => (await user(`/api/content?scope=library&q=${encodeURIComponent(q)}&limit=10${extra}`)).json.items.map(item => item.id);
+  assert.ok((await search('yada yada hi dharmasya')).includes(link.id), 'plain letters find accented titles');
+  assert.ok((await search('sri krsna')).includes(link.id), 'and accented descriptions');
+  assert.ok((await search('YADĀ')).includes(link.id), 'accented, upper-case queries work too');
+  const edited = await admin(`/api/content/${link.id}`, { method: 'PATCH', body: { title: 'Paritrāṇāya sādhūnām' } });
+  assert.equal(edited.status, 200);
+  assert.ok((await search('paritranaya sadhunam')).includes(link.id), 'edits are searchable straight away');
+  assert.ok(!(await search('yada yada')).includes(link.id), 'the old title no longer matches');
+
+  const body = Buffer.from('verse notes');
+  const started = await user('/api/uploads', { method: 'POST', body: { title: 'Verse notes', name: 'verse.txt', mime: 'text/plain', size: body.length } });
+  const doc = (await user(`/api/uploads/${started.json.id}?offset=0`, { method: 'PUT', raw: body })).json.id;
+  await user(`/api/content/${doc}/text`, { method: 'PUT', body: { text: 'Chapter four: abhyutthānam adharmasya tadātmānaṁ sṛjāmy aham' } });
+  await admin(`/api/content/${doc}/review`, { method: 'POST', body: { decision: 'approved' } });
+  const found = (await user(`/api/content?scope=library&q=${encodeURIComponent('tadatmanam srjamy')}&in=all&limit=10`)).json.items.find(item => item.id === doc);
+  assert.ok(found, 'document text is matched without accents');
+  assert.match(found.snippet, /tadātmānaṁ sṛjāmy/, 'the snippet keeps the original accents');
+  assert.ok(!('search_title' in found), 'search copies are not sent to the browser');
+  for (const id of [link.id, doc]) await admin(`/api/content/${id}`, { method: 'DELETE', body: REASON });
+});
+
 test('members are notified about reviews, removals and role changes, and can mark them read', async () => {
   const user = await signIn('user');
   const admin = await signIn('site_admin');

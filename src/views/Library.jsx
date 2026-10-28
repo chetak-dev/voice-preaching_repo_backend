@@ -9,6 +9,7 @@ import {
 import { LIBRARY_TYPE_KEY } from './Overview.jsx';
 import { onThumbnail } from '../uploads.js';
 import { backfillThumbnails } from '../thumbnails.js';
+import { fold, findFolded } from '../fold.js';
 import { LANGUAGES, useFacets } from '../components/Tags.jsx';
 
 
@@ -45,19 +46,20 @@ function Shelf({ title, icon: Icon, items, renderCard }) {
 const loadRecent = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
 
 function Highlight({ text, query }) {
-  const index = text.toLowerCase().indexOf(query.toLowerCase());
-  if (!query || index < 0) return text;
-  return <>{text.slice(0, index)}<mark className="rounded bg-brand-100 px-0.5 text-brand-800">{text.slice(index, index + query.length)}</mark>{text.slice(index + query.length)}</>;
+  const match = findFolded(text, query);
+  if (!query || !match) return text;
+  const [start, end] = match;
+  return <>{text.slice(0, start)}<mark className="rounded bg-brand-100 px-0.5 text-brand-800">{text.slice(start, end)}</mark>{text.slice(end)}</>;
 }
 
 // Ranks title prefix matches first, then word starts, then anywhere in the title, uploader or description.
 function rank(item, q) {
-  const title = item.title.toLowerCase();
+  const title = fold(item.title);
   if (title.startsWith(q)) return 0;
   if (title.includes(` ${q}`)) return 1;
   if (title.includes(q)) return 2;
-  if (item.uploader?.toLowerCase().includes(q)) return 3;
-  if (item.description?.toLowerCase().includes(q)) return 4;
+  if (fold(item.uploader).includes(q)) return 3;
+  if (fold(item.description).includes(q)) return 4;
   return -1;
 }
 
@@ -78,7 +80,7 @@ function SearchBox({ query, onQuery, pool, onPick, busy, placeholder }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [recent, setRecent] = useState(loadRecent);
-  const q = query.trim().toLowerCase();
+  const q = fold(query.trim());
   const box = useRef(null);
   const [room, setRoom] = useState(320);
   // Suggestions use the space left between the search box and the on-screen keyboard.
@@ -106,7 +108,7 @@ function SearchBox({ query, onQuery, pool, onPick, busy, placeholder }) {
     const matches = pool.map(item => [item, rank(item, q)]).filter(([, score]) => score >= 0)
       .sort((a, b) => a[1] - b[1] || (b[0].views || 0) - (a[0].views || 0)).slice(0, 6)
       .map(([item]) => ({ kind: 'item', key: `i:${item.id}`, item }));
-    const people = [...new Set(pool.map(item => item.uploader).filter(name => name?.toLowerCase().includes(q)))].slice(0, 3)
+    const people = [...new Set(pool.map(item => item.uploader).filter(name => fold(name).includes(q)))].slice(0, 3)
       .map(name => ({ kind: 'person', key: `p:${name}`, text: name, count: pool.filter(item => item.uploader === name).length }));
     return [...matches, ...people];
   }, [q, pool, recent]);

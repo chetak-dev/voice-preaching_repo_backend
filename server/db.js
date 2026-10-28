@@ -3,6 +3,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { fold } from './fold.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
@@ -166,7 +167,12 @@ export function openDatabase({ url, authToken, directory }) {
       // Size plus hashes of the start and end of the file, used to spot duplicate uploads.
       ['fingerprint', 'TEXT'],
       ['request_id', 'TEXT'],
+      // Accent-free, lower-case copies used by search (see fold.js and syncSearch below).
+      ['search_title', 'TEXT'],
+      ['search_body', 'TEXT'],
+      ['search_extra', 'TEXT'],
     ]);
+    await addColumns('content_text', [['folded', 'TEXT']]);
     await client.execute('CREATE INDEX IF NOT EXISTS content_parent ON content(parent_id, created_at)');
     await client.execute('CREATE INDEX IF NOT EXISTS content_fingerprint ON content(fingerprint)');
     await client.execute('CREATE INDEX IF NOT EXISTS content_uploader ON content(uploader_id, created_at)');
@@ -187,8 +193,21 @@ export function openDatabase({ url, authToken, directory }) {
       ['fingerprint', 'TEXT'],
       ['request_id', 'TEXT'],
     ]);
+    // Fill in the accent-free search copies for anything stored before they existed.
+    for (const { id } of await db.all('SELECT id FROM content WHERE search_title IS NULL')) await syncSearch(db, id);
+    for (const row of await db.all('SELECT content_id, body FROM content_text WHERE folded IS NULL')) {
+      await db.run('UPDATE content_text SET folded = ? WHERE content_id = ?', fold(row.body), row.content_id);
+    }
   })();
   return db;
+}
+
+/** Refreshes the accent-free copies of an item's title, description and tags; call after changing them. */
+export async function syncSearch(db, id) {
+  const row = await db.get('SELECT title, description, speaker, topics, original_name FROM content WHERE id = ?', id);
+  if (!row) return;
+  await db.run('UPDATE content SET search_title = ?, search_body = ?, search_extra = ? WHERE id = ?',
+    fold(row.title), fold(row.description), fold([row.speaker, row.topics, row.original_name].filter(Boolean).join(' ')), id);
 }
 
 export function audit(db, actorId, action, subject) {

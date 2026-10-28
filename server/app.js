@@ -5,7 +5,8 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { google } from 'googleapis';
-import { openDatabase, audit, hashPassword, verifyPassword } from './db.js';
+import { openDatabase, audit, hashPassword, syncSearch, verifyPassword } from './db.js';
+import { fold, foldWithMap } from './fold.js';
 import { createBackup, cronAuthorized, listBackups } from './backup.js';
 import { CHUNK_SIZE, DRIVE_FILE_SCOPE, createStorage, driveClient, encryptToken, ensureAppFolder, isConnected, oauthClient, refreshQuota } from './storage.js';
 
@@ -541,11 +542,13 @@ export function createApp(overrides = {}) {
       if (userId !== item.uploader_id) await notify(userId, 'request', `Request fulfilled: ${request.title}`, `"${item.title}" was added to the library.`, item.id);
     }
   }
-  const strip = ({ storage_key, fingerprint, ...item }) => item;
+  const strip = ({ storage_key, fingerprint, search_title, search_body, search_extra, ...item }) => item;
   const snippetFrom = (body, tokens) => {
-    const lower = body.toLowerCase();
-    const at = tokens.map(token => lower.indexOf(token)).filter(index => index >= 0).sort((a, b) => a - b)[0];
-    if (at == null) return null;
+    // Matching ignores accents, but the snippet shows the original text.
+    const { folded, map } = foldWithMap(body);
+    const found = tokens.map(token => folded.indexOf(token)).filter(index => index >= 0).sort((a, b) => a - b)[0];
+    if (found == null) return null;
+    const at = map[found];
     const start = Math.max(0, at - 60);
     return `${start ? '…' : ''}${body.slice(start, at + 140).replace(/\s+/g, ' ').trim()}…`;
   };
@@ -575,19 +578,19 @@ export function createApp(overrides = {}) {
       params.push(`%,${chapter}.%`, `%,${chapter},%`);
     }
     const q = param('q').slice(0, 100);
-    const tokens = [...new Set(q.toLowerCase().split(/\s+/).filter(Boolean))].slice(0, 8);
+    const tokens = [...new Set(fold(q).split(/\s+/).filter(Boolean))].slice(0, 8);
     // By default only titles, descriptions and uploader names are searched, which is fast. `in=all` also searches
-    // tags, file names and the text inside documents.
+    // tags, file names and the text inside documents. Accents are ignored on both sides (see fold.js).
     const deep = param('in') === 'all';
     for (const token of tokens) {
       const like = `%${likeEscape(token)}%`;
       const verse = token.match(/^(\d{1,2})[.:](\d{1,2})$/);
-      where.push(`(c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\'
-        ${deep ? `OR c.speaker LIKE ? ESCAPE '\\' OR c.topics LIKE ? ESCAPE '\\' OR c.original_name LIKE ? ESCAPE '\\'
-        OR EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id AND x.body LIKE ? ESCAPE '\\')` : ''}
+      where.push(`(coalesce(c.search_title, c.title) LIKE ? ESCAPE '\\' OR coalesce(c.search_body, c.description) LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\'
+        ${deep ? `OR c.search_extra LIKE ? ESCAPE '\\'
+        OR EXISTS(SELECT 1 FROM content_text x WHERE x.content_id = c.id AND coalesce(x.folded, x.body) LIKE ? ESCAPE '\\')` : ''}
         ${verse ? "OR (',' || c.verses || ',') LIKE ? OR (',' || c.verses || ',') LIKE ?" : ''})`);
       params.push(like, like, like);
-      if (deep) params.push(like, like, like, like);
+      if (deep) params.push(like, like);
       if (verse) params.push(`%,${Number(verse[1])}.${Number(verse[2])},%`, `%,${Number(verse[1])},%`);
     }
     // Type counts ignore the type filter so the chips show how many of each kind match.
@@ -600,8 +603,8 @@ export function createApp(overrides = {}) {
       newest: 'c.created_at DESC', oldest: 'c.created_at ASC', title: 'c.title COLLATE NOCASE ASC', popular: 'views DESC, c.created_at DESC',
     };
     const sort = orders[param('sort')] ? param('sort') : 'newest';
-    const relevance = q ? "CASE WHEN c.title LIKE ? ESCAPE '\\' THEN 0 WHEN c.title LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END, " : '';
-    const orderParams = q ? [`${likeEscape(q)}%`, `%${likeEscape(q)}%`] : [];
+    const relevance = q ? "CASE WHEN coalesce(c.search_title, c.title) LIKE ? ESCAPE '\\' THEN 0 WHEN coalesce(c.search_title, c.title) LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END, " : '';
+    const orderParams = q ? [`${likeEscape(fold(q))}%`, `%${likeEscape(fold(q))}%`] : [];
     const limit = Number(param('limit'));
     const paged = Number.isInteger(limit) && limit > 0;
     const offset = Math.max(0, Number.parseInt(param('offset'), 10) || 0);
@@ -615,7 +618,7 @@ export function createApp(overrides = {}) {
     ]);
 
     if (deep && tokens.length) {
-      const withText = rows.filter(row => row.has_text && !tokens.some(token => row.title.toLowerCase().includes(token)));
+      const withText = rows.filter(row => row.has_text && !tokens.some(token => fold(row.title).includes(token)));
       if (withText.length) {
         const bodies = await db.all(`SELECT content_id, body FROM content_text WHERE content_id IN (${withText.map(() => '?').join(',')})`, ...withText.map(row => row.id));
         for (const { content_id: id, body } of bodies) {
@@ -673,8 +676,8 @@ export function createApp(overrides = {}) {
     if (item.type !== 'doc') throw fail(400, 'Only documents have searchable text.');
     if (typeof req.body.text !== 'string') throw fail(400, 'Send the document text.');
     const body = req.body.text.replace(/\u0000/g, '').replace(/[ \t]+/g, ' ').slice(0, TEXT_LIMIT);
-    await db.run(`INSERT INTO content_text (content_id, body, created_at) VALUES (?, ?, ?)
-      ON CONFLICT(content_id) DO UPDATE SET body = excluded.body, created_at = excluded.created_at`, item.id, body, new Date().toISOString());
+    await db.run(`INSERT INTO content_text (content_id, body, folded, created_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(content_id) DO UPDATE SET body = excluded.body, folded = excluded.folded, created_at = excluded.created_at`, item.id, body, fold(body), new Date().toISOString());
     res.json({ ok: true, length: body.length });
   }));
   app.get('/api/overview', h(async (req, res) => {
@@ -779,6 +782,7 @@ export function createApp(overrides = {}) {
     await db.run(`INSERT INTO content (id,title,description,type,url,status,uploader_id,created_at,parent_id,reviewed_by,reviewed_at,language,speaker,verses,topics,request_id)
       VALUES (?,?,?,'link',?,?,?,?,?,?,?,?,?,?,?,?)`, id, title, description, url, review.status, req.user.id, new Date().toISOString(), parent?.id ?? null,
     review.reviewedBy, review.reviewedAt, tags.language, tags.speaker, tags.verses, tags.topics, requestId);
+    await syncSearch(db, id);
     if (review.status === 'approved') await published({ id, title, uploader_id: req.user.id, parent_id: parent?.id ?? null, request_id: requestId }, null);
     await audit(db, req.user.id, parent ? 'Added to upload' : review.action, parent ? `${title} → ${parent.title}` : title);
     res.status(201).json({ id, status: review.status, message: review.message });
@@ -917,6 +921,7 @@ export function createApp(overrides = {}) {
           review.reviewedBy, review.reviewedAt, upload.language ?? null, upload.speaker ?? null, upload.verses ?? null, upload.topics ?? null,
           upload.fingerprint ?? null, upload.request_id ?? null);
           created = true;
+          await syncSearch(db, id);
         } catch (error) {
           if (error.status === 409) throw error;
           existing = await db.get('SELECT id FROM content WHERE id = ? AND uploader_id = ?', id, req.user.id);
@@ -1103,6 +1108,7 @@ export function createApp(overrides = {}) {
       AND (deletion_token IS NULL OR deletion_lock_expires IS NULL OR deletion_lock_expires < ?)`,
     title, description, tags.language, tags.speaker, tags.verses, tags.topics, item.id, Date.now());
     if (!changed.changes) throw fail(409, 'This content is being changed or is no longer available.');
+    await syncSearch(db, item.id);
     await audit(db, req.user.id, 'Edited content', item.title === title ? title : `${item.title} → ${title}`);
     res.json({ ok: true, title, description, ...tags });
   }));

@@ -2,6 +2,11 @@
 
 The version shown in the app (sidebar on desktop, **More** menu on phones) comes from `package.json`. Bump `version` in `package.json` and add an entry here for every release.
 
+## 1.7.17
+
+- Search ignores accents: "yada yada hi dharmasya" finds "yada yada hi dharmasya" (and the other way round) in titles, descriptions, tags and text inside documents. Snippets still show the original diacritics.
+- Screen readers read the logo tagline as words.
+
 ## 1.7.16
 
 - The searching spinner stays centred in the search box instead of slipping down while you type.

@@ -60,8 +60,9 @@ export function Logo({ size = 'md', light = false, textClassName }) {
         <p className={cx('whitespace-nowrap font-brand font-semibold uppercase leading-none tracking-[0.08em] -mr-[0.08em]', size === 'lg' ? 'text-[22px]' : size === 'sm' ? 'text-[17px]' : 'text-[18px]',
           light ? 'text-white' : 'bg-gradient-to-r from-violet-600 to-indigo-600 bg-clip-text text-transparent')}>{APP_NAME}</p>
         {/* Letters are spread evenly so the tagline is exactly as wide as the name above it. */}
-        <p aria-label={APP_TAGLINE} className={cx('flex w-0 min-w-full justify-between whitespace-nowrap font-medium uppercase leading-none',
+        <p className={cx('flex w-0 min-w-full justify-between whitespace-nowrap font-medium uppercase leading-none',
           size === 'lg' ? 'text-[10.5px]' : size === 'sm' ? 'text-[8px]' : 'text-[8.5px]', light ? 'text-white/70' : 'text-slate-500')}>
+          <span className="sr-only">{APP_TAGLINE}</span>
           {[...APP_TAGLINE].map((letter, index) => <span key={index} aria-hidden="true">{letter === ' ' ? '\u00a0' : letter}</span>)}
         </p>
       </div>

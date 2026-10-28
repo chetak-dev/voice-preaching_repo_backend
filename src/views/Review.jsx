@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Check, Eye, Inbox, Search, X } from 'lucide-react';
 import { api } from '../api.js';
+import { fold } from '../fold.js';
 import { ContentThumb, PreviewModal } from '../components/Content.jsx';
 import {
   Avatar, Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, Spinner, TYPE_META, formatBytes, timeAgo, useAsync, useToast,
@@ -89,8 +90,8 @@ export default function Review({ user, onChanged }) {
   const isOwn = item => user.role === 'org_admin' && item.uploader_id === user.id;
   const reviewable = useMemo(() => items.filter(item => !isOwn(item)), [items, user.id, user.role]);
   const filtered = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return reviewable.filter(item => !term || [item.title, item.description, item.uploader].some(value => value?.toLowerCase().includes(term)));
+    const term = fold(query.trim());
+    return reviewable.filter(item => !term || [item.title, item.description, item.uploader].some(value => fold(value).includes(term)));
   }, [reviewable, query]);
   const selectIds = filtered.slice(0, MAX_BULK_REVIEW).map(item => item.id);
   const allFilteredSelected = selectIds.length > 0 && selectIds.every(id => selected.includes(id));

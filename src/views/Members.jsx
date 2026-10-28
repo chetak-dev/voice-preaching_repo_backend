@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Ban, KeyRound, RotateCcw, Search, ShieldCheck, ShieldMinus, ShieldPlus, UserCheck, Users } from 'lucide-react';
 import { api } from '../api.js';
+import { fold } from '../fold.js';
 import {
   Avatar, Badge, Button, EmptyState, ErrorBanner, Modal, PageHeader, ROLE_META, Spinner, cx, timeAgo, useAsync, useToast,
 } from '../components/ui.jsx';
@@ -33,12 +34,12 @@ export default function Members({ user }) {
   }), [all]);
 
   const members = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = fold(query.trim());
     return all.filter(m => {
       if (filter === 'admins' && m.role === 'user') return false;
       if (filter === 'user' && m.role !== 'user') return false;
       if (filter === 'suspended' && !m.suspended) return false;
-      return !q || [m.name, m.email].some(v => v?.toLowerCase().includes(q));
+      return !q || [m.name, m.email].some(v => fold(v).includes(q));
     });
   }, [all, filter, query]);
 
